@@ -5,3 +5,8 @@ __pycache__
 .gitignore
 data
 README.md
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.log
+*.sqlite3
