@@ -712,6 +712,45 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
   background: #f2ede4;
   color: var(--ink);
 }
+
+.platform-footer {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.platform-footer__github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  opacity: 0.65;
+  text-decoration: none;
+  transition: opacity 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.platform-footer__github:hover,
+.platform-footer__github:focus-visible {
+  opacity: 1;
+  color: #252525;
+  transform: translateY(-1px);
+}
+
+.platform-footer__github:focus-visible {
+  outline: 2px solid rgba(138, 144, 122, 0.45);
+  outline-offset: 2px;
+}
+
+.platform-footer__icon {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+}
+
 .items-list .meta {
   font-size: 0.85rem; color: var(--ink-soft); white-space: nowrap;
 }

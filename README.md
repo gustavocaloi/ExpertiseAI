@@ -346,3 +346,7 @@ Estrutura visual:
 - O upload de PDF/DOCX aciona conversor:
   - Tenta usar `docling.document_converter.DocumentConverter`.
   - Se indisponível, retorna erro de conversão com mensagem explícita para instalação/configuração.
+
+## Licença
+
+Este projeto está licenciado sob a [MIT License](LICENSE).
