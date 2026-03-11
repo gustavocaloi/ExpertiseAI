@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Expertise.AI</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
     <link rel="stylesheet" href="/static/styles.css" />
     <script defer src="/static/app.js"></script>
   </head>
@@ -203,19 +204,19 @@
               <form id="createDocForm" class="vertical-form">
                 <label>
                   <span>Área</span>
-                  <select required id="docArea"></select>
+                  <select id="docArea"></select>
                 </label>
                 <label>
                   <span>Categoria</span>
-                  <select required id="docCategoria"></select>
-                </label>
-                <label>
-                  <span>Slug</span>
-                  <input required id="docSlug" placeholder="onboarding-primeiro-usuario" />
+                  <select id="docCategoria"></select>
                 </label>
                 <label>
                   <span>Título</span>
                   <input required id="docTitle" placeholder="Guia de Onboarding" />
+                </label>
+                <label>
+                  <span>Slug</span>
+                  <input id="docSlug" placeholder="onboarding-primeiro-usuario" />
                 </label>
                 <label>
                   <span>Tags (separadas por vírgula)</span>
@@ -223,17 +224,17 @@
                 </label>
                 <label>
                   <span>Arquivo (PDF/DOCX)</span>
-                  <input type="file" id="docFile" accept=".pdf,.docx" required />
+                  <input type="file" id="docFile" accept=".pdf,.docx" />
                 </label>
                 <label>
                   <span>Pré-visualização (Markdown)</span>
-                  <textarea id="docContent" rows="8" readonly placeholder="Após selecionar o arquivo, o conteúdo convertido aparecerá aqui." class="content-preview"></textarea>
+                  <textarea id="docContent" rows="8" placeholder="Digite o conteúdo em Markdown ou deixe vazio para importar arquivo." class="content-preview"></textarea>
                 </label>
                 <label class="checkrow">
                   <input type="checkbox" id="docPublish" />
                   <span>Publicar versão após salvar</span>
                 </label>
-                <button type="submit">Importar arquivo e salvar</button>
+                <button type="submit">Salvar documento</button>
                 <p class="helper" id="createMsg"></p>
               </form>
             </article>
@@ -287,6 +288,20 @@
       </main>
 
       <footer class="platform-footer">
+        <a
+          class="platform-footer__api-docs platform-footer__github"
+          href="/docs"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Abrir documentação da API (Swagger/OpenAPI)"
+        >
+          <img
+            class="platform-footer__icon"
+            src="https://cdn.simpleicons.org/swagger/2f2a26"
+            alt=""
+            aria-hidden="true"
+          />
+        </a>
         <a
           class="platform-footer__github"
           href="https://github.com/gustavocaloi/ExpertiseAI"

@@ -718,6 +718,7 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  gap: 10px;
 }
 
 .platform-footer__github {
@@ -749,6 +750,11 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
   width: 17px;
   height: 17px;
   fill: currentColor;
+  display: block;
+}
+
+.platform-footer__icon[src] {
+  object-fit: contain;
 }
 
 .items-list .meta {

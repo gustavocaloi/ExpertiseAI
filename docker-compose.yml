@@ -1,10 +1,12 @@
 services:
   expertise-ai:
-    image: lcaloi/expertise-ai:latest
+    image: lcaloi/expertiseai:latest
     container_name: expertise-ai
+    env_file:
+      - .env
     environment:
       EXPAI_DATA_DIR: /app/data
-      EXPAI_ACCESS_CONTROL_ENABLED: "true"
+      EXPAI_ACCESS_CONTROL_ENABLED: ${EXPAI_ACCESS_CONTROL_ENABLED:-false}
       EXPAI_BOOTSTRAP_DEFAULT_ADMIN: "true"
       EXPAI_DEFAULT_COMPANY_NAME: Expertise.AI
       EXPAI_DEFAULT_COMPANY_SLUG: expai

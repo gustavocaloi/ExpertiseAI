@@ -15,9 +15,9 @@ router = APIRouter()
 
 
 class DocumentCreatePayload(BaseModel):
-    area: str
-    categoria: str
-    slug: str
+    area: Optional[str] = None
+    categoria: Optional[str] = None
+    slug: Optional[str] = None
     title: str
     content: str
     tags: list[str] = []
@@ -46,12 +46,16 @@ def _author_email(user: TokenData) -> str:
 
 def _assert_company_taxonomies(
     company_id: int,
-    area: str,
-    categoria: str,
+    area: Optional[str],
+    categoria: Optional[str],
 ) -> None:
-    if not db.taxonomy_exists(company_id, "area", area):
+    area_normalized = (area or "").strip()
+    categoria_normalized = (categoria or "").strip()
+    fallback_area = services.DEFAULT_AREA
+    fallback_categoria = services.DEFAULT_CATEGORIA
+    if area_normalized and area_normalized not in {fallback_area, ""} and not db.taxonomy_exists(company_id, "area", area_normalized):
         raise HTTPException(status_code=400, detail="Área não cadastrada para esta empresa.")
-    if not db.taxonomy_exists(company_id, "categoria", categoria):
+    if categoria_normalized and categoria_normalized not in {fallback_categoria, ""} and not db.taxonomy_exists(company_id, "categoria", categoria_normalized):
         raise HTTPException(status_code=400, detail="Categoria não cadastrada para esta empresa.")
 
 
@@ -196,9 +200,9 @@ def delete_company_category(
 @router.post("/empresas/{company_id}/documentos/upload")
 async def upload_document(
     company_id: int,
-    area: str = Form(...),
-    categoria: str = Form(...),
-    slug: str = Form(...),
+    area: Optional[str] = Form(default=None),
+    categoria: Optional[str] = Form(default=None),
+    slug: Optional[str] = Form(default=None),
     title: str = Form(None),
     tags: str = Form(""),
     file: UploadFile = File(...),

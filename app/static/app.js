@@ -88,6 +88,11 @@ const versionPreviewContent = document.getElementById('versionPreviewContent');
 const versionPublishToggle = document.getElementById('versionPublishToggle');
 const publishToggleInfo = document.getElementById('publishToggleInfo');
 const logoutBtn = document.getElementById('userLogoutMenuItem');
+const docAreaSelect = docArea;
+const docCategoriaSelect = docCategoria;
+const docSlugInput = document.getElementById('docSlug');
+const docTitleInput = document.getElementById('docTitle');
+const docContentInput = document.getElementById('docContent');
 
 let selectedDocument = null;
 let editingDocumentKey = null;
@@ -96,6 +101,9 @@ let editingHistoryVersions = [];
 let selectedHistoryVersion = null;
 let importProgressTimer = null;
 let taxonomyLoading = false;
+let isSlugAutoSuggestionEnabled = true;
+const FALLBACK_AREA = 'sem-area';
+const FALLBACK_CATEGORIA = 'sem-categoria';
 
 function setTaxonomySelectOptions() {
   if (!docArea || !docCategoria) {
@@ -104,7 +112,7 @@ function setTaxonomySelectOptions() {
   const areaList = state.taxonomies.areas;
   const categoriaList = state.taxonomies.categorias;
 
-  docArea.innerHTML = '<option value="" disabled selected>Selecione uma área</option>';
+  docArea.innerHTML = '<option value="" selected>Sem área (opcional)</option>';
   areaList.forEach((name) => {
     const option = document.createElement('option');
     option.value = name;
@@ -112,7 +120,7 @@ function setTaxonomySelectOptions() {
     docArea.appendChild(option);
   });
 
-  docCategoria.innerHTML = '<option value="" disabled selected>Selecione uma categoria</option>';
+  docCategoria.innerHTML = '<option value="" selected>Sem categoria (opcional)</option>';
   categoriaList.forEach((name) => {
     const option = document.createElement('option');
     option.value = name;
@@ -170,6 +178,20 @@ function renderTaxonomyError(message) {
 
 function isAdminProfile(profile = state.profile) {
   return (profile?.role || '').toLowerCase() === 'admin';
+}
+
+function toBooleanValue(value, fallback = true) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return ['1', 'true', 'yes', 'on'].includes(normalized);
+  }
+  return fallback;
 }
 
 function isAccessControlEnabled() {
@@ -294,7 +316,7 @@ async function loadTaxonomies() {
 async function loadPlatformConfig() {
   try {
     const config = await apiFetch('/api/v1/config');
-    state.accessControlEnabled = config?.access_control_enabled !== false;
+    state.accessControlEnabled = toBooleanValue(config?.access_control_enabled, true);
 
     if (!isAccessControlEnabled()) {
       const defaultCompanyId = config?.default_company_id;
@@ -306,10 +328,19 @@ async function loadPlatformConfig() {
         state.companyId = '1';
         localStorage.setItem('expai_company_id', state.companyId);
       }
+      if (!state.companyId) {
+        state.companyId = '1';
+        localStorage.setItem('expai_company_id', state.companyId);
+      }
       ensureAnonymousProfile();
     }
   } catch {
-    state.accessControlEnabled = true;
+    state.accessControlEnabled = false;
+    if (!state.companyId) {
+      state.companyId = localStorage.getItem('expai_company_id') || '1';
+      localStorage.setItem('expai_company_id', state.companyId);
+    }
+    ensureAnonymousProfile();
   }
 }
 
@@ -1015,6 +1046,7 @@ function openCreateForSelectedDocument() {
     showToast('Selecione um documento publicado antes de atualizar.', 'error');
     return;
   }
+  isSlugAutoSuggestionEnabled = false;
 
   const selectedVersion = normalizeVersion(selectedDocument.version) || null;
   const targetVersion = selectedVersion || normalizeVersion(selectedDocument.published_version) || null;
@@ -1099,10 +1131,49 @@ function parseTags(value) {
 
 function collectTaxonomyFields() {
   return {
-    area: (docArea?.value || '').trim(),
-    categoria: (docCategoria?.value || '').trim(),
+    area: (docAreaSelect?.value || '').trim(),
+    categoria: (docCategoriaSelect?.value || '').trim(),
   };
 }
+
+function slugifyText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function maybeFillSlugFromTitle() {
+  if (!docSlugInput || !docTitleInput) {
+    return;
+  }
+  if (!isSlugAutoSuggestionEnabled) {
+    return;
+  }
+  docSlugInput.value = slugifyText(docTitleInput.value);
+}
+
+function handleSlugManualEdit() {
+  if (!docSlugInput || !docTitleInput) {
+    return;
+  }
+  const currentAuto = slugifyText(docTitleInput.value);
+  const currentSlug = (docSlugInput.value || '').trim();
+  isSlugAutoSuggestionEnabled = !currentSlug || currentSlug === currentAuto;
+  if (isSlugAutoSuggestionEnabled) {
+    docSlugInput.value = currentAuto;
+  }
+}
+
+docTitleInput?.addEventListener('input', () => {
+  maybeFillSlugFromTitle();
+});
+docSlugInput?.addEventListener('input', handleSlugManualEdit);
 
 async function apiFetch(path, options = {}) {
   const headers = options.headers || {};
@@ -1315,6 +1386,7 @@ function showDashboardCreateFlow() {
   editingHistoryVersions = [];
   selectedHistoryVersion = null;
   hideEditHistory();
+  isSlugAutoSuggestionEnabled = true;
   createMsg.textContent = '';
   createMsg.className = 'helper';
 
@@ -1353,54 +1425,106 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
   const docContent = document.getElementById('docContent');
 
   const file = docFile?.files?.[0];
-  if (!file) {
-    createMsg.textContent = 'Selecione um arquivo PDF ou DOCX para criar/atualizar o documento.';
+  const content = docContent?.value || '';
+
+  if (!file && !content.trim()) {
+    createMsg.textContent = 'Informe conteúdo no campo de texto ou anexe um arquivo PDF/DOCX.';
     createMsg.className = 'helper error';
     return;
   }
-  showImportProgress('Enviando arquivo para processamento...');
+  if (file) {
+    showImportProgress('Enviando arquivo para processamento...');
+  } else {
+    showImportProgress('Salvando documento...');
+  }
 
   const { area, categoria } = collectTaxonomyFields();
-  const slug = docSlug?.value || '';
   const title = docTitle?.value || '';
+  const generatedSlug = slugifyText(title);
+  const slug = (docSlug?.value || '').trim() || generatedSlug;
   const tags = parseTags(docTags?.value || '');
   const publicar = Boolean(docPublish?.checked);
+  const normalizedArea = area || FALLBACK_AREA;
+  const normalizedCategoria = categoria || FALLBACK_CATEGORIA;
 
-  if (!area || !categoria) {
-    createMsg.textContent = 'Selecione uma área e uma categoria válidas antes de importar.';
-    createMsg.className = 'helper error';
-    hideImportProgress();
-    return;
+  if (docSlug && !docSlug.value.trim() && generatedSlug) {
+    docSlug.value = generatedSlug;
   }
 
   const context = {
-    area,
-    categoria,
+    area: normalizedArea,
+    categoria: normalizedCategoria,
     slug,
     title,
   };
 
-  const form = new FormData();
-  form.set('area', area);
-  form.set('categoria', categoria);
-  form.set('slug', slug);
-  if (title) form.set('title', title);
-  form.set('tags', tags.join(', '));
-  form.set('file', file);
+  const isFileUpload = Boolean(file);
+  const requestTagString = tags.join(', ');
 
   try {
-    const res = await fetch(`/api/v1/empresas/${state.companyId}/documentos/upload`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${state.token}` },
-      body: form,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.detail || `Erro ${res.status}`);
+    let uploadedDoc;
+    let uploadedVersion = null;
 
-    const uploadedVersion = data?.documento?.version;
-    if (docContent && uploadedVersion) {
+    if (isFileUpload) {
+      const form = new FormData();
+      form.set('area', normalizedArea);
+      form.set('categoria', normalizedCategoria);
+      if (slug) {
+        form.set('slug', slug);
+      }
+      if (title) {
+        form.set('title', title);
+      }
+      if (requestTagString) {
+        form.set('tags', requestTagString);
+      }
+      form.set('file', file);
+
+      const res = await fetch(`/api/v1/empresas/${state.companyId}/documentos/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${state.token}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.detail || `Erro ${res.status}`);
+      }
+
+      uploadedDoc = data?.documento || {};
+      uploadedVersion = uploadedDoc?.version;
+    } else {
+      const payload = {
+        area: normalizedArea,
+        categoria: normalizedCategoria,
+        slug: slug || null,
+        title,
+        content,
+        tags,
+        publicar,
+      };
+
+      const data = await apiFetch(`/api/v1/empresas/${state.companyId}/documentos`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      uploadedDoc = data?.documento || {};
+      uploadedVersion = uploadedDoc?.version;
+    }
+
+    const resolvedArea = uploadedDoc?.area || context.area;
+    const resolvedCategoria = uploadedDoc?.categoria || context.categoria;
+    const resolvedSlug = uploadedDoc?.slug || context.slug;
+    context.area = resolvedArea;
+    context.categoria = resolvedCategoria;
+    context.slug = resolvedSlug;
+    if (docArea) setFormSelectValue(docArea, resolvedArea);
+    if (docCategoria) setFormSelectValue(docCategoria, resolvedCategoria);
+    if (docSlug) docSlug.value = resolvedSlug || '';
+    if (docTitle) docTitle.value = uploadedDoc?.title || title;
+
+    if (isFileUpload && docContent && uploadedVersion) {
       updateImportProgress(55, 'Baixando versão convertida...');
-      const payload = await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/${encodeURIComponent(area)}/${encodeURIComponent(categoria)}/${encodeURIComponent(slug)}/conteudo?version=${encodeURIComponent(uploadedVersion)}`);
+      const payload = await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/${encodeURIComponent(resolvedArea)}/${encodeURIComponent(resolvedCategoria)}/${encodeURIComponent(resolvedSlug)}/conteudo?version=${encodeURIComponent(uploadedVersion)}`);
       if (payload?.content !== undefined) {
         docContent.value = payload.content;
       }
@@ -1408,11 +1532,13 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
     }
 
     if (publicar && uploadedVersion) {
-      updateImportProgress(80, 'Publicando documento...');
-      await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/${encodeURIComponent(area)}/${encodeURIComponent(categoria)}/${encodeURIComponent(slug)}/publicar`, {
-        method: 'PUT',
-        body: JSON.stringify({ version: String(uploadedVersion) }),
-      });
+      if (isFileUpload) {
+        updateImportProgress(80, 'Publicando documento...');
+        await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/${encodeURIComponent(context.area)}/${encodeURIComponent(context.categoria)}/${encodeURIComponent(context.slug)}/publicar`, {
+          method: 'PUT',
+          body: JSON.stringify({ version: String(uploadedVersion) }),
+        });
+      }
     }
 
     if (uploadedVersion) {
@@ -1427,13 +1553,18 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
         await loadPublishedDocs();
       }
 
-      createMsg.textContent = `Documento importado como versão ${uploadedVersion}. ${publicar ? 'Publicado.' : 'Rascunho criado.'}`;
+      createMsg.textContent = isFileUpload
+        ? `Documento importado como versão ${uploadedVersion}. ${publicar ? 'Publicado.' : 'Rascunho criado.'}`
+        : `Documento salvo como versão ${uploadedVersion}. ${publicar ? 'Publicado.' : 'Rascunho criado.'}`;
       createMsg.className = 'helper success';
-      showToast(`Arquivo convertido e ${publicar ? 'publicado' : 'salvo como rascunho'} (v${uploadedVersion}).`);
+      showToast(isFileUpload
+        ? `Arquivo convertido e ${publicar ? 'publicado' : 'salvo como rascunho'} (v${uploadedVersion}).`
+        : `Documento ${publicar ? 'publicado' : 'salvo como rascunho'} (v${uploadedVersion}).`,
+      );
       showInlineCreateSession(false);
       showSession('dashboardSession');
       await loadPublishedDocs();
-      hideImportProgress('Importação concluída.');
+      hideImportProgress(isFileUpload ? 'Importação concluída.' : 'Documento salvo.');
       return;
     }
 

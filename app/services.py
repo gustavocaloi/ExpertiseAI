@@ -22,6 +22,11 @@ def _now() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
 
+DEFAULT_AREA = "sem-area"
+DEFAULT_CATEGORIA = "sem-categoria"
+DEFAULT_SLUG = "documento"
+
+
 def _doc_dir(company_id: int, area: str, categoria: str, slug: str) -> Path:
     return Path(KB_ROOT) / str(company_id) / _sanitize(area) / _sanitize(categoria) / _sanitize(slug)
 
@@ -46,6 +51,16 @@ def _write_meta(meta_file: Path, payload: Dict[str, Any]) -> None:
     meta_file.parent.mkdir(parents=True, exist_ok=True)
     with meta_file.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _normalize_taxonomy(value: Optional[str], fallback: str) -> str:
+    text = (value or "").strip()
+    return _sanitize(text) if text else _sanitize(fallback)
+
+
+def _normalize_slug(value: Optional[str], fallback: str) -> str:
+    text = (value or "").strip()
+    return _sanitize(text) if text else _sanitize(fallback)
 
 
 def _parse_version_string(value: Any) -> tuple[int, int]:
@@ -122,9 +137,9 @@ def _frontmatter(markdown: str, metadata: Dict[str, Any]) -> str:
 
 def create_or_update_text_document(
     company_id: int,
-    area: str,
-    categoria: str,
-    slug: str,
+    area: Optional[str],
+    categoria: Optional[str],
+    slug: Optional[str],
     title: str,
     content: str,
     author_email: str,
@@ -132,9 +147,13 @@ def create_or_update_text_document(
     is_published: bool = False,
     base_version: Optional[str] = None,
 ) -> Dict[str, Any]:
-    area_n = _sanitize(area)
-    categoria_n = _sanitize(categoria)
-    slug_n = _sanitize(slug)
+    area_n = _normalize_taxonomy(area, DEFAULT_AREA)
+    categoria_n = _normalize_taxonomy(categoria, DEFAULT_CATEGORIA)
+    if (slug is None or not str(slug).strip()) and title:
+        slug_value = title
+    else:
+        slug_value = slug
+    slug_n = _normalize_slug(slug_value, DEFAULT_SLUG)
     doc_dir = _doc_dir(company_id, area_n, categoria_n, slug_n)
     meta_path = _meta_path(company_id, area_n, categoria_n, slug_n)
 
@@ -220,9 +239,9 @@ def create_or_update_text_document(
 
 async def import_file_to_markdown(
     company_id: int,
-    area: str,
-    categoria: str,
-    slug: str,
+    area: Optional[str],
+    categoria: Optional[str],
+    slug: Optional[str],
     file: UploadFile,
     author_email: str,
     tags: Iterable[str] = (),
