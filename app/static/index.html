@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Expertise.AI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <div id="importProgressOverlay" class="import-overlay hidden-view" aria-live="polite" role="status" aria-label="Processando importação do documento">
+        <div class="import-overlay__backdrop"></div>
+        <div class="import-overlay__dialog">
+          <div class="import-overlay__icon" aria-hidden="true">⟳</div>
+          <h3 id="importProgressTitle">Processando documento</h3>
+          <p id="importProgressMessage" class="import-overlay__message">Importando e convertendo arquivo para markdown...</p>
+          <div class="import-progress-track" aria-hidden="true">
+            <div id="importProgressBar" class="import-progress-bar"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+      <header class="topbar">
+        <div class="brand-wrap">
+          <span class="brand-mark">AI</span>
+          <div id="brandHomeLink" role="button" tabindex="0" aria-label="Ir para o início">
+            <h1>Expertise.AI</h1>
+            <p class="subtitle">Base de Conhecimento por Expertise Operacional</p>
+          </div>
+        </div>
+        <nav class="workspace-nav" id="workspaceNav">
+          <button class="menu-item" data-session="dashboardSession">Início</button>
+          <button class="menu-item" data-session="taxonomySession">Estrutura</button>
+        </nav>
+        <div class="topbar-tools">
+          <div class="status-chip" id="statusChip">sem autenticação</div>
+          <div id="userMenu" class="user-menu">
+            <button id="userMenuBtn" class="user-menu__btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Abrir menu do usuário">
+              <span id="userAvatar" class="user-menu__avatar" aria-hidden="true">◉</span>
+            </button>
+            <div id="userMenuDropdown" class="user-menu__dropdown" role="menu" aria-hidden="true">
+              <button type="button" id="userProfileMenuItem" class="user-menu__item" role="menuitem" data-session="profileSession">Perfil</button>
+              <button type="button" id="userAdminMenuItem" class="user-menu__item hidden-view" role="menuitem" data-session="userAdminSession">Usuários</button>
+              <button type="button" id="userLogoutMenuItem" class="user-menu__item user-menu__item--danger" role="menuitem">Sair</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="content-area">
+        <section class="panel login-panel active" id="loginPanel">
+          <article class="hero-copy">
+            <h2>Entrada rápida</h2>
+            <p>
+              Acesse em minutos suas bases por empresa, visualize documentos publicados,
+              crie versões e mantenha o padrão de conhecimento da sua organização.
+            </p>
+          </article>
+
+          <form class="form-card" id="loginForm">
+            <h3>Entrar</h3>
+            <label>
+              <span>E-mail</span>
+              <input required type="email" id="email" placeholder="admin@empresa.com" />
+            </label>
+            <label>
+              <span>Senha</span>
+              <input required type="password" id="password" placeholder="••••••••" />
+            </label>
+            <label>
+              <span>ID da Empresa</span>
+              <input required type="number" id="companyId" min="1" placeholder="1" />
+            </label>
+            <button type="submit">Acessar área de conhecimento</button>
+            <p class="helper" id="loginMsg"></p>
+          </form>
+        </section>
+
+        <section class="panel dashboard-panel" id="dashboardPanel">
+          <section class="session panel-card active-session" id="dashboardSession">
+            <section class="toolbar panel-row">
+              <div class="panel-actions">
+                <button id="refreshDocs">Publicar novo documento</button>
+              </div>
+              <div class="toolbar-meta">Filtro por área, categoria, tag e busca</div>
+            </section>
+
+            <section class="filters panel-compact">
+              <label>
+                <span>Área</span>
+                <input type="text" id="filterArea" placeholder="suporte" />
+              </label>
+              <label>
+                <span>Categoria</span>
+                <input type="text" id="filterCategoria" placeholder="processos" />
+              </label>
+              <label>
+                <span>Tag</span>
+                <input type="text" id="filterTag" placeholder="onboarding" />
+              </label>
+              <label>
+                <span>Busca</span>
+                <input type="text" id="filterBusca" placeholder="termo" />
+              </label>
+            </section>
+
+          <section class="actions-grid">
+              <article class="action-card">
+                <h3>Publicados</h3>
+                <ul id="docsList" class="items-list"></ul>
+              </article>
+            </section>
+          </section>
+
+          <section class="session panel-card" id="profileSession">
+            <article class="action-card">
+              <h3>Perfil do usuário</h3>
+              <div class="profile-grid">
+                <p><strong>Nome:</strong> <span id="profileName">-</span></p>
+                <p><strong>E-mail:</strong> <span id="profileEmail">-</span></p>
+                <p><strong>Perfil:</strong> <span id="profileRole">-</span></p>
+                <p><strong>Empresa:</strong> <span id="profileCompany">-</span></p>
+              </div>
+            </article>
+          </section>
+
+          <section class="session panel-card" id="taxonomySession">
+            <article class="action-card taxonomy-admin">
+              <h3>Administração de Áreas e Categorias</h3>
+              <div class="action-card-grid">
+                <section class="taxonomy-block">
+                  <h4>Áreas</h4>
+                  <ul id="areasList" class="taxonomy-list">Carregando...</ul>
+                  <form id="addAreaForm" class="vertical-form">
+                    <label>
+                      <span>Nova área</span>
+                      <input required id="areaInput" placeholder="suporte" />
+                    </label>
+                    <button type="submit">Adicionar área</button>
+                  </form>
+                </section>
+
+                <section class="taxonomy-block">
+                  <h4>Categorias</h4>
+                  <ul id="categoriasList" class="taxonomy-list">Carregando...</ul>
+                  <form id="addCategoriaForm" class="vertical-form">
+                    <label>
+                      <span>Nova categoria</span>
+                      <input required id="categoriaInput" placeholder="processos" />
+                    </label>
+                    <button type="submit">Adicionar categoria</button>
+                  </form>
+                </section>
+              </div>
+              <p class="helper" id="taxonomyMsg"></p>
+            </article>
+          </section>
+
+          <section class="session panel-card" id="userAdminSession">
+            <article class="action-card">
+              <h3>Administração de usuários</h3>
+              <form id="addUserForm" class="vertical-form">
+                <label>
+                  <span>Nome completo</span>
+                  <input required id="newUserName" placeholder="Nome do usuário" />
+                </label>
+                <label>
+                  <span>E-mail</span>
+                  <input required type="email" id="newUserEmail" placeholder="usuario@empresa.com" />
+                </label>
+                <label>
+                  <span>Senha inicial</span>
+                  <input required type="password" id="newUserPassword" placeholder="••••••••" />
+                </label>
+                <label>
+                  <span>Perfil</span>
+                  <select required id="newUserRole">
+                    <option value="">Selecione um perfil</option>
+                    <option value="admin">admin</option>
+                    <option value="editor">editor</option>
+                    <option value="revisor">revisor</option>
+                  </select>
+                </label>
+                <button type="submit">Adicionar usuário</button>
+              </form>
+              <p class="helper" id="userAdminMsg"></p>
+
+              <section class="action-card-grid" style="margin-top: 12px;">
+                <div>
+                  <h4>Usuários da empresa</h4>
+                  <ul id="usersList" class="items-list">Carregando usuários...</ul>
+                </div>
+              </section>
+            </article>
+          </section>
+
+          <section class="session panel-card" id="createSession">
+            <article class="action-card">
+              <h3>Novo documento</h3>
+              <form id="createDocForm" class="vertical-form">
+                <label>
+                  <span>Área</span>
+                  <select required id="docArea"></select>
+                </label>
+                <label>
+                  <span>Categoria</span>
+                  <select required id="docCategoria"></select>
+                </label>
+                <label>
+                  <span>Slug</span>
+                  <input required id="docSlug" placeholder="onboarding-primeiro-usuario" />
+                </label>
+                <label>
+                  <span>Título</span>
+                  <input required id="docTitle" placeholder="Guia de Onboarding" />
+                </label>
+                <label>
+                  <span>Tags (separadas por vírgula)</span>
+                  <input id="docTags" placeholder="onboarding, suporte" />
+                </label>
+                <label>
+                  <span>Arquivo (PDF/DOCX)</span>
+                  <input type="file" id="docFile" accept=".pdf,.docx" required />
+                </label>
+                <label>
+                  <span>Pré-visualização (Markdown)</span>
+                  <textarea id="docContent" rows="8" readonly placeholder="Após selecionar o arquivo, o conteúdo convertido aparecerá aqui." class="content-preview"></textarea>
+                </label>
+                <label class="checkrow">
+                  <input type="checkbox" id="docPublish" />
+                  <span>Publicar versão após salvar</span>
+                </label>
+                <button type="submit">Importar arquivo e salvar</button>
+                <p class="helper" id="createMsg"></p>
+              </form>
+            </article>
+
+            <article class="action-card hidden-view" id="editHistorySession">
+              <h3>Linha do tempo de versões</h3>
+              <p class="helper" id="editHistoryHint">Selecione um documento publicado para visualizar o histórico.</p>
+              <ul id="editVersionsList" class="timeline-list"></ul>
+
+              <section class="action-card hidden-view" id="versionPreviewSession">
+                <h4>Visualização da versão</h4>
+                <p class="helper" id="versionPreviewInfo">Selecione uma versão acima para exibir o conteúdo.</p>
+                <pre id="versionPreviewContent" class="version-preview-content">Nenhuma versão selecionada.</pre>
+                <div class="publish-toggle-row">
+                  <span class="helper" id="publishToggleInfo">Publicar esta versão</span>
+                  <label class="onoff-switch">
+                    <input type="checkbox" id="versionPublishToggle" />
+                    <span class="onoff-slider"></span>
+                  </label>
+                </div>
+              </section>
+            </article>
+          </section>
+
+          <section class="session panel-card" id="publishSession">
+            <article class="action-card">
+              <h3>Publicar versão</h3>
+              <form id="publishForm" class="vertical-form">
+                <label>
+                  <span>Slug do documento</span>
+                  <input required id="pubSlug" placeholder="onboarding-primeiro-usuario" />
+                </label>
+                <label>
+                  <span>Área</span>
+                  <input required id="pubArea" />
+                </label>
+                <label>
+                  <span>Categoria</span>
+                  <input required id="pubCategoria" />
+                </label>
+                <label>
+                  <span>Versão a publicar</span>
+                  <input required type="number" id="pubVersion" min="1" />
+                </label>
+                <button type="submit">Definir publicada</button>
+                <p class="helper" id="publishMsg"></p>
+              </form>
+            </article>
+          </section>
+        </section>
+      </main>
+
+      <div id="docViewerModal" class="doc-modal" aria-live="polite" aria-hidden="true">
+        <div class="doc-modal__overlay" id="docModalOverlay"></div>
+        <div class="doc-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="docModalTitle">
+          <header class="doc-modal__header">
+            <div>
+              <h3 id="docModalTitle">Visualizar documento</h3>
+              <p class="doc-modal__meta" id="docModalMeta"></p>
+            </div>
+            <button type="button" id="docModalCloseBtn" class="ghost doc-modal__close" aria-label="Fechar popup">✕</button>
+          </header>
+          <section>
+            <pre id="docModalContent" class="doc-modal__content">Selecione um documento para visualizar.</pre>
+          </section>
+          <footer class="doc-modal__footer">
+            <div class="doc-modal__footer-row">
+              <button type="button" id="docModalEditBtn" class="doc-modal__edit-btn">Editar documento</button>
+              <div id="modalPublishToggleWrap" class="publish-toggle-row">
+                <span class="helper" id="modalPublishToggleInfo">Publicar esta versão</span>
+                <label class="onoff-switch">
+                  <input type="checkbox" id="modalVersionPublishToggle" />
+                  <span class="onoff-slider"></span>
+                </label>
+              </div>
+            </div>
+          </footer>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

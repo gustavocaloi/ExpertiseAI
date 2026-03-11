@@ -1,0 +1,6 @@
+fastapi==0.116.0
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+python-jose[cryptography]==3.4.0
+passlib[bcrypt]==1.7.4
+docling==2.12.0
