@@ -1,17 +1,28 @@
 from __future__ import annotations
 
-from typing import Optional, Union
+import logging
+import asyncio
+import json
+from pathlib import Path
+from datetime import datetime
+from typing import Any, Optional, Union
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import UploadFile, File, Form
 from pydantic import BaseModel
 
 from . import db, services
-from .config import ACCESS_CONTROL_ENABLED
+from .config import ACCESS_CONTROL_ENABLED, DATA_DIR
 from .security import TokenData, require_company_access, require_role
 
 
 router = APIRouter()
+_UPLOAD_JOBS: dict[str, dict[str, Any]] = {}
+_ACTIVE_UPLOAD_JOBS: set[str] = set()
+_UPLOAD_JOBS_DIR = Path(DATA_DIR) / "_upload_jobs"
+_UPLOAD_JOB_STALE_SECONDS = 7200
+logger = logging.getLogger(__name__)
 
 
 class DocumentCreatePayload(BaseModel):
@@ -42,6 +53,133 @@ def _is_scoped_access_allowed(company_id: int, user: TokenData) -> None:
 
 def _author_email(user: TokenData) -> str:
     return "anônimo" if not ACCESS_CONTROL_ENABLED else (user.email or "anônimo")
+
+
+def _upload_job_path(job_id: str) -> Path:
+    return _UPLOAD_JOBS_DIR / f"{job_id}.json"
+
+
+def _persist_upload_job(job_id: str, payload: dict[str, Any]) -> None:
+    try:
+        _UPLOAD_JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        with _upload_job_path(job_id).open("w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        logger.exception("Falha ao persistir estado do job %s", job_id)
+
+
+def _mark_upload_job_failed(job_id: str, payload: dict[str, Any], error_message: str) -> dict[str, Any]:
+    payload.update({
+        "status": "failed",
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "error": error_message,
+    })
+    _UPLOAD_JOBS[job_id] = payload
+    _persist_upload_job(job_id, payload)
+    return payload
+
+
+def _load_upload_job(job_id: str) -> Optional[dict[str, Any]]:
+    cached = _UPLOAD_JOBS.get(job_id)
+    if cached is not None:
+        return cached
+    path = _upload_job_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        created_at_raw = payload.get("created_at")
+        if created_at_raw and payload.get("status") == "processing":
+            try:
+                created_at = datetime.fromisoformat(str(created_at_raw).replace("Z", "+00:00"))
+            except ValueError:
+                created_at = None
+            if created_at is not None:
+                elapsed = (datetime.utcnow() - created_at.replace(tzinfo=None)).total_seconds()
+                if elapsed > _UPLOAD_JOB_STALE_SECONDS:
+                    payload = _mark_upload_job_failed(
+                        job_id,
+                        payload,
+                        "Processamento excedeu o limite de tempo e foi encerrado. Reenvie o arquivo.",
+                    )
+        _UPLOAD_JOBS[job_id] = payload
+        return payload
+    except Exception:
+        logger.exception("Falha ao carregar estado do job %s", job_id)
+        return None
+
+
+def _load_company_upload_jobs(company_id: int, status_filter: Optional[str] = None) -> list[dict[str, Any]]:
+    if not _UPLOAD_JOBS_DIR.exists():
+        return []
+
+    jobs: list[dict[str, Any]] = []
+    for path in sorted(_UPLOAD_JOBS_DIR.glob("*.json"), reverse=True):
+        payload = _load_upload_job(path.stem)
+        if not isinstance(payload, dict):
+            continue
+
+        if payload.get("empresa_id") != company_id:
+            continue
+        if status_filter and payload.get("status") != status_filter:
+            continue
+
+        jobs.append({
+            "job_id": payload.get("job_id") or path.stem,
+            "status": payload.get("status", ""),
+            "document_uuid": payload.get("document_uuid"),
+            "empresa_id": payload.get("empresa_id"),
+            "slug": payload.get("slug"),
+            "area": payload.get("area") or "sem-area",
+            "categoria": payload.get("categoria") or "sem-categoria",
+            "title": payload.get("title") or payload.get("file_name"),
+            "file_name": payload.get("file_name"),
+            "created_at": payload.get("created_at", ""),
+            "updated_at": payload.get("updated_at", ""),
+            "error": payload.get("error"),
+            "documento": payload.get("documento"),
+        })
+    return jobs
+
+
+def _touch_upload_job(job_id: str, updates: dict[str, Any]) -> None:
+    if not job_id:
+        return
+    if job_id not in _UPLOAD_JOBS:
+        cached = _load_upload_job(job_id)
+        if cached is None:
+            return
+    job = _UPLOAD_JOBS.get(job_id)
+    if not isinstance(job, dict):
+        return
+    job.update(updates)
+    _UPLOAD_JOBS[job_id] = job
+    _persist_upload_job(job_id, job)
+
+
+def cleanup_zombie_upload_jobs() -> int:
+    if not _UPLOAD_JOBS_DIR.exists():
+        return 0
+
+    cleaned = 0
+    for path in _UPLOAD_JOBS_DIR.glob("*.json"):
+        job_id = path.stem
+        payload = _load_upload_job(job_id)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("status") != "processing":
+            continue
+        if job_id in _ACTIVE_UPLOAD_JOBS:
+            continue
+        _mark_upload_job_failed(
+            job_id,
+            payload,
+            "Processamento interrompido antes da conclusão. Envie o arquivo novamente.",
+        )
+        cleaned += 1
+        logger.warning("Job de upload marcado como zumbi/falha: %s", job_id)
+    return cleaned
 
 
 def _assert_company_taxonomies(
@@ -208,6 +346,7 @@ async def upload_document(
     categoria: Optional[str] = Form(default=None),
     slug: Optional[str] = Form(default=None),
     base_version: Optional[str] = Form(default=None),
+    publicar: bool = Form(default=False),
     title: str = Form(None),
     tags: str = Form(""),
     file: UploadFile = File(...),
@@ -217,23 +356,119 @@ async def upload_document(
     try:
         _assert_company_taxonomies(company_id, area, categoria)
         tag_list = [item.strip() for item in tags.split(",") if item.strip()] if tags else []
-        result = await services.import_file_to_markdown(
-            company_id=company_id,
-            area=area,
-            categoria=categoria,
-            slug=slug,
-            base_version=base_version,
-            file=file,
-            author_email=_author_email(user),
-            tags=tag_list,
-            title=title,
-        )
-        documento_payload = {**result}
-        if documento_payload.get("title") is not None and documento_payload.get("titulo") is None:
-            documento_payload["titulo"] = documento_payload.get("title")
-        return {"documento": documento_payload}
+        file_name = file.filename or "documento"
+        upload_dir = Path(services.KB_ROOT) / "_tmp_uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = upload_dir / f"{uuid4().hex}-{file_name}"
+        with upload_path.open("wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+        if upload_path.stat().st_size == 0:
+            upload_path.unlink(missing_ok=True)
+            raise ValueError("Arquivo vazio")
+        job_id = uuid4().hex
+
+        _UPLOAD_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "processing",
+            "empresa_id": company_id,
+            "slug": slug,
+            "area": area,
+            "categoria": categoria,
+            "title": title,
+            "file_name": file_name,
+            "publicar": publicar,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        _persist_upload_job(job_id, _UPLOAD_JOBS[job_id])
+
+        async def run_job() -> None:
+            _ACTIVE_UPLOAD_JOBS.add(job_id)
+            try:
+                logger.info("Iniciando processamento assíncrono do upload %s (%s)", job_id, file_name)
+                result = await services.import_file_to_markdown_path(
+                    company_id=company_id,
+                    area=area,
+                    categoria=categoria,
+                    slug=slug,
+                    base_version=base_version,
+                    file_path=upload_path,
+                    filename=file_name,
+                    author_email=_author_email(user),
+                    tags=tag_list,
+                    title=title,
+                )
+                documento_payload = {**result}
+                if documento_payload.get("title") is not None and documento_payload.get("titulo") is None:
+                    documento_payload["titulo"] = documento_payload.get("title")
+                if publicar and documento_payload.get("version"):
+                    published_result = services.set_published_version(
+                        company_id=company_id,
+                        area=documento_payload.get("area") or area or services.DEFAULT_AREA,
+                        categoria=documento_payload.get("categoria") or categoria or services.DEFAULT_CATEGORIA,
+                        slug=documento_payload.get("slug") or slug or services.DEFAULT_SLUG,
+                        version=str(documento_payload["version"]),
+                    )
+                    documento_payload["published_version"] = published_result.get("version", documento_payload.get("published_version", ""))
+                _UPLOAD_JOBS[job_id].update({
+                    "status": "done",
+                    "document_uuid": documento_payload.get("document_uuid"),
+                    "updated_at": datetime.utcnow().isoformat() + "Z",
+                    "documento": documento_payload,
+                })
+                logger.info("Upload concluído com sucesso: %s", job_id)
+                _touch_upload_job(job_id, _UPLOAD_JOBS[job_id])
+            except Exception as exc:  # pragma: no cover - depende de runtime de conversão
+                logger.exception("Falha no processamento assíncrono do upload %s", job_id)
+                _UPLOAD_JOBS[job_id].update({
+                    "status": "failed",
+                    "updated_at": datetime.utcnow().isoformat() + "Z",
+                    "error": str(exc),
+                })
+                logger.info("Upload marcado como failed: %s", job_id)
+                _touch_upload_job(job_id, _UPLOAD_JOBS[job_id])
+            finally:
+                _ACTIVE_UPLOAD_JOBS.discard(job_id)
+                upload_path.unlink(missing_ok=True)
+                logger.info("Finalizando processamento assíncrono do upload %s", job_id)
+
+        asyncio.create_task(run_job())
+        return {"job_id": job_id, "status": "processing"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/empresas/{company_id}/documentos/upload/{job_id}")
+def upload_document_status(
+    company_id: int,
+    job_id: str,
+    user: TokenData = Depends(require_role("admin", "editor")),
+):
+    _is_scoped_access_allowed(company_id, user)
+    job = _load_upload_job(job_id)
+    if not job or job.get("empresa_id") != company_id:
+        raise HTTPException(status_code=410, detail="Processamento não encontrado ou reiniciado. Envie o arquivo novamente.")
+    return job
+
+
+@router.get("/empresas/{company_id}/documentos/processando")
+def list_processing_uploads(
+    company_id: int,
+    status: Optional[str] = Query(default=None),
+    user: TokenData = Depends(require_role("admin", "editor")),
+):
+    _is_scoped_access_allowed(company_id, user)
+    return {
+        "documentos": [
+            job
+            for job in _load_company_upload_jobs(company_id, status_filter=status)
+            if job.get("status") in {"processing", "failed", "done"}
+        ],
+    }
 
 
 @router.put("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}/publicar")

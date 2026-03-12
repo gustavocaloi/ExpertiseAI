@@ -3,21 +3,59 @@ from __future__ import annotations
 import errno
 import json
 import asyncio
+import os
+import logging
 import re
+import shutil
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union
+from uuid import uuid4
 
 from fastapi import UploadFile
 
 from . import db
-from .config import KB_ROOT, DOCLING_ENABLED
+from .config import (
+    KB_ROOT,
+    DOCLING_CACHE_DIR,
+    DOCLING_ENABLED,
+    DOCLING_MAX_FILE_SIZE_MB,
+    DOCLING_MAX_PAGES,
+    DOCLING_OCR_ENABLED,
+    DOCLING_PREFETCH_MODELS,
+    DOCLING_PDF_PAGE_BATCH_SIZE,
+    DOCLING_TABLE_STRUCTURE_ENABLED,
+    DOCLING_THREADS,
+    DOCLING_TIMEOUT_SECONDS,
+)
 
 
 _VERSION_FILE_RE = re.compile(r"^v(.+)\\.md$")
 _IO_MAX_RETRIES = 3
 _IO_RETRY_DELAY_SECONDS = 0.05
+_DOCLING_TIMEOUT_SECONDS = DOCLING_TIMEOUT_SECONDS
+_DOCLING_MAX_PAGES = DOCLING_MAX_PAGES
+_DOCLING_MAX_FILE_SIZE_BYTES = max(1, DOCLING_MAX_FILE_SIZE_MB) * 1024 * 1024
+_DOCLING_PDF_PAGE_BATCH_SIZE = max(1, DOCLING_PDF_PAGE_BATCH_SIZE)
+_DOCLING_THREADS = max(1, DOCLING_THREADS)
+_DOCLING_WORKER_PATH = Path(__file__).resolve().parent / "docling_worker.py"
+logger = logging.getLogger(__name__)
+_HF_CACHE_DIR = DOCLING_CACHE_DIR / "huggingface"
+
+
+def _prepare_docling_cache() -> None:
+    DOCLING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    os.environ["HF_HOME"] = str(_HF_CACHE_DIR)
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(_HF_CACHE_DIR)
+    os.environ.pop("TRANSFORMERS_CACHE", None)
+    os.environ["DOCLING_CACHE_DIR"] = str(DOCLING_CACHE_DIR)
+    os.environ["XDG_CACHE_HOME"] = str(DOCLING_CACHE_DIR)
+    os.environ["OMP_NUM_THREADS"] = str(_DOCLING_THREADS)
+    os.environ["MKL_NUM_THREADS"] = str(_DOCLING_THREADS)
+    logger.info("Docling cache configurado: hf=%s cache=%s", _HF_CACHE_DIR, DOCLING_CACHE_DIR)
 
 
 def _sanitize(value: str) -> str:
@@ -53,13 +91,85 @@ def _read_meta(company_id: int, area: str, categoria: str, slug: str) -> Dict[st
     if not meta_file.exists():
         raise FileNotFoundError("Documento não encontrado")
     with meta_file.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        payload = json.load(f)
+    changed = False
+    document_uuid = str(payload.get("document_uuid") or "").strip()
+    if not document_uuid:
+        payload["document_uuid"] = str(uuid4())
+        changed = True
+    versions = payload.get("versions", [])
+    if isinstance(versions, list):
+        for entry in versions:
+            if not isinstance(entry, dict):
+                continue
+            version_uuid = str(entry.get("version_uuid") or "").strip()
+            if not version_uuid:
+                entry["version_uuid"] = str(uuid4())
+                changed = True
+    if changed:
+        _write_meta(meta_file, payload)
+    return payload
 
 
 def _write_meta(meta_file: Path, payload: Dict[str, Any]) -> None:
     meta_file.parent.mkdir(parents=True, exist_ok=True)
     with meta_file.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _docling_worker_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["HF_HOME"] = str(_HF_CACHE_DIR)
+    env["HUGGINGFACE_HUB_CACHE"] = str(_HF_CACHE_DIR)
+    env.pop("TRANSFORMERS_CACHE", None)
+    env["DOCLING_CACHE_DIR"] = str(DOCLING_CACHE_DIR)
+    env["XDG_CACHE_HOME"] = str(DOCLING_CACHE_DIR)
+    env["OMP_NUM_THREADS"] = str(_DOCLING_THREADS)
+    env["MKL_NUM_THREADS"] = str(_DOCLING_THREADS)
+    env["EXPAI_DOCLING_MAX_PAGES"] = str(_DOCLING_MAX_PAGES)
+    env["EXPAI_DOCLING_MAX_FILE_SIZE_BYTES"] = str(_DOCLING_MAX_FILE_SIZE_BYTES)
+    env["EXPAI_DOCLING_PDF_PAGE_BATCH_SIZE"] = str(_DOCLING_PDF_PAGE_BATCH_SIZE)
+    env["EXPAI_DOCLING_TIMEOUT_SECONDS"] = str(_DOCLING_TIMEOUT_SECONDS)
+    env["EXPAI_DOCLING_OCR_ENABLED"] = "true" if DOCLING_OCR_ENABLED else "false"
+    env["EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED"] = "true" if DOCLING_TABLE_STRUCTURE_ENABLED else "false"
+    return env
+
+
+def _clear_docling_runtime_cache() -> None:
+    if DOCLING_CACHE_DIR.exists():
+        shutil.rmtree(DOCLING_CACHE_DIR, ignore_errors=True)
+    DOCLING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _should_retry_docling_artifacts(stderr_text: str, stdout_text: str) -> bool:
+    message = f"{stderr_text}\n{stdout_text}".lower()
+    return (
+        "missing safe tensors file" in message
+        or "downloading detection model" in message
+        or "downloading recognition model" in message
+    )
+
+
+def ensure_docling_models_ready(force: bool = False) -> None:
+    if not DOCLING_ENABLED:
+        return
+
+    if force:
+        _clear_docling_runtime_cache()
+        return
+
+    _prepare_docling_cache()
+
+
+async def ensure_docling_models_ready_async() -> None:
+    if not DOCLING_ENABLED or not DOCLING_PREFETCH_MODELS:
+        return
+    logger.info(
+        "Esta versão do docling fará download dos modelos sob demanda no primeiro processamento; "
+        "o cache persistente ficará em %s.",
+        DOCLING_CACHE_DIR,
+    )
 
 
 def _normalize_taxonomy(value: Optional[str], fallback: str) -> str:
@@ -301,6 +411,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
             )
 
             meta = {
+                "document_uuid": str(uuid4()),
                 "slug": slug,
                 "title": _safe_str(first_metadata.get("title")) or _safe_str(first_version.get("title")) or slug,
                 "empresa_id": company_id,
@@ -313,6 +424,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
                 "versions": [
                     {
                         "version": item["version"],
+                        "version_uuid": str(uuid4()),
                         "file": item["file"],
                         "author": item["author"],
                         "created_at": item["created_at"],
@@ -400,6 +512,7 @@ def create_or_update_text_document(
 
     if not meta_path.exists():
         meta = {
+            "document_uuid": str(uuid4()),
             "slug": slug_n,
             "title": title,
             "empresa_id": company_id,
@@ -428,6 +541,7 @@ def create_or_update_text_document(
         version = _extract_next_version(meta)
     version_meta = {
         "version": _version_display(version),
+        "version_uuid": str(uuid4()),
         "file": f"v{version}.md",
         "author": author_email,
         "created_at": _now(),
@@ -472,10 +586,12 @@ def create_or_update_text_document(
     _write_meta(meta_path, meta)
 
     return {
+        "document_uuid": meta.get("document_uuid"),
         "empresa_id": company_id,
         "area": area_n,
         "categoria": categoria_n,
         "slug": slug_n,
+        "version_uuid": version_meta.get("version_uuid"),
         "version": _version_display(version),
         "published_version": meta.get("published_version", ""),
         "path": str(path),
@@ -493,20 +609,46 @@ async def import_file_to_markdown(
     tags: Iterable[str] = (),
     title: Optional[str] = None,
 ) -> Dict[str, Any]:
-    ext = Path(file.filename or "").suffix.lower()
     raw = await file.read()
-    if not raw:
-        raise ValueError("Arquivo vazio")
+    return await import_file_to_markdown_bytes(
+        company_id=company_id,
+        area=area,
+        categoria=categoria,
+        slug=slug,
+        base_version=base_version,
+        raw=raw,
+        filename=file.filename or "documento",
+        author_email=author_email,
+        tags=tags,
+        title=title,
+    )
 
-    converted = ""
+
+async def import_file_to_markdown_path(
+    company_id: int,
+    area: Optional[str],
+    categoria: Optional[str],
+    slug: Optional[str],
+    base_version: Optional[str],
+    file_path: str | Path,
+    filename: str,
+    author_email: str,
+    tags: Iterable[str] = (),
+    title: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized_path = Path(file_path)
+    if not normalized_path.exists():
+        raise ValueError("Arquivo de upload não encontrado.")
+
+    ext = Path(filename or "").suffix.lower()
     if ext in {".txt", ".md"}:
-        converted = raw.decode("utf-8", errors="ignore")
+        converted = normalized_path.read_text(encoding="utf-8", errors="ignore")
     elif ext in {".pdf", ".docx"} and DOCLING_ENABLED:
-        converted = await _convert_to_markdown_with_docling(raw, file.filename or "documento")
+        converted = await _convert_to_markdown_with_docling_file(str(normalized_path), filename or "documento")
     else:
         raise ValueError("Formato inválido. Use PDF, DOCX, MD ou TXT.")
 
-    doc_title = title or Path(file.filename or "documento").stem
+    doc_title = title or Path(filename or "documento").stem
     return create_or_update_text_document(
         company_id=company_id,
         area=area,
@@ -521,40 +663,129 @@ async def import_file_to_markdown(
     )
 
 
-def _convert_to_markdown_with_docling_sync(raw: bytes, filename: str) -> str:
+async def import_file_to_markdown_bytes(
+    company_id: int,
+    area: Optional[str],
+    categoria: Optional[str],
+    slug: Optional[str],
+    base_version: Optional[str],
+    raw: bytes,
+    filename: str,
+    author_email: str,
+    tags: Iterable[str] = (),
+    title: Optional[str] = None,
+) -> Dict[str, Any]:
+    ext = Path(filename or "").suffix.lower()
+    if not raw:
+        raise ValueError("Arquivo vazio")
+
+    converted = ""
+    if ext in {".txt", ".md"}:
+        converted = raw.decode("utf-8", errors="ignore")
+    elif ext in {".pdf", ".docx"} and DOCLING_ENABLED:
+        converted = await _convert_to_markdown_with_docling(raw, filename or "documento")
+    else:
+        raise ValueError("Formato inválido. Use PDF, DOCX, MD ou TXT.")
+
+    doc_title = title or Path(filename or "documento").stem
+    return create_or_update_text_document(
+        company_id=company_id,
+        area=area,
+        categoria=categoria,
+        slug=slug,
+        title=doc_title,
+        content=converted,
+        author_email=author_email,
+        tags=tags,
+        base_version=base_version,
+        is_published=False,
+    )
+
+
+async def _run_docling_worker(file_path: str, filename: str) -> str:
+    await asyncio.to_thread(ensure_docling_models_ready)
+    return await _run_docling_worker_once(file_path, filename, allow_retry=True)
+
+
+async def _run_docling_worker_once(file_path: str, filename: str, allow_retry: bool) -> str:
+    _prepare_docling_cache()
     temp_dir = Path(KB_ROOT) / "_tmp_uploads"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_file = temp_dir / filename
+    result_path = temp_dir / f"{uuid4().hex}-docling-result.json"
+    file_size_bytes = Path(file_path).stat().st_size if Path(file_path).exists() else -1
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(_DOCLING_WORKER_PATH),
+        file_path,
+        str(result_path),
+        filename,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_docling_worker_env(),
+    )
     try:
-        with temp_file.open("wb") as f:
-            f.write(raw)
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=_DOCLING_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        process.kill()
+        await process.communicate()
+        raise TimeoutError(f"Conversão do documento excedeu {_DOCLING_TIMEOUT_SECONDS} segundos.") from exc
 
-        try:
-            from docling.document_converter import DocumentConverter
-        except Exception as e:  # pragma: no cover
-            raise ValueError(
-                "Integração com docling não disponível. Instale a dependência docling."
-            ) from e
+    stderr_text = stderr.decode("utf-8", errors="ignore").strip()
+    stdout_text = stdout.decode("utf-8", errors="ignore").strip()
+    if process.returncode != 0:
+        if allow_retry and _should_retry_docling_artifacts(stderr_text, stdout_text):
+            logger.warning("Cache do docling inconsistente para %s. Limpando todo o cache e tentando novamente uma vez.", filename)
+            await asyncio.to_thread(ensure_docling_models_ready, True)
+            return await _run_docling_worker_once(file_path, filename, allow_retry=False)
+        logger.error(
+            "Falha no subprocesso docling para %s (returncode=%s size=%s). stdout=%r stderr=%r",
+            filename,
+            process.returncode,
+            file_size_bytes,
+            stdout_text,
+            stderr_text,
+        )
+        error_message = stderr_text or stdout_text
+        if not error_message:
+            error_message = (
+                f"Falha ao converter arquivo com docling (returncode={process.returncode}, "
+                f"size={file_size_bytes}, sem stdout/stderr)."
+            )
+        raise ValueError(error_message)
 
-        converter = DocumentConverter()
-        result = converter.convert(str(temp_file))
-
-        document = getattr(result, "document", None)
-        if document is None:
-            raise ValueError("Falha ao converter arquivo com docling.")
-
-        if hasattr(document, "export_to_markdown"):
-            return document.export_to_markdown()
-        if hasattr(document, "to_markdown"):
-            return document.to_markdown()
-        raise ValueError("Conversor docling sem método conhecido de exportação.")
+    try:
+        with result_path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as exc:
+        logger.exception("Falha ao ler resultado do worker docling para %s", filename)
+        raise ValueError("Docling não retornou um resultado válido.") from exc
     finally:
-        if temp_file.exists():
-            temp_file.unlink(missing_ok=True)
+        result_path.unlink(missing_ok=True)
+
+    converted = str(payload.get("markdown") or "")
+    if not converted.strip():
+        raise ValueError("Docling retornou conteúdo vazio.")
+    return converted
 
 
 async def _convert_to_markdown_with_docling(raw: bytes, filename: str) -> str:
-    return await asyncio.to_thread(_convert_to_markdown_with_docling_sync, raw, filename)
+    temp_dir = Path(KB_ROOT) / "_tmp_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_dir / f"{uuid4().hex}-{filename or 'documento'}"
+    try:
+        with temp_path.open("wb") as f:
+            f.write(raw)
+        return await _run_docling_worker(str(temp_path), filename or "documento")
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+async def _convert_to_markdown_with_docling_file(file_path: str, filename: str) -> str:
+    logger.info("Iniciando conversão docling em subprocesso para arquivo: %s", filename)
+    return await _run_docling_worker(file_path, filename)
 
 
 def set_published_version(
@@ -574,10 +805,12 @@ def set_published_version(
     if not any(_version_matches(item, version) for item in versions):
         raise ValueError("Versão não encontrada para este documento.")
 
+    published_version_uuid = None
     for v in meta["versions"]:
         if _version_matches(v["version"], version):
             v["published"] = True
             v["published_at"] = _now()
+            published_version_uuid = v.get("version_uuid")
         else:
             v["published"] = False
             v["published_at"] = None
@@ -585,7 +818,13 @@ def set_published_version(
     meta["published_version"] = version
     _write_meta(_meta_path(company_id, area_n, categoria_n, slug_n), meta)
 
-    return {"empresa_id": company_id, "slug": slug_n, "version": version}
+    return {
+        "document_uuid": meta.get("document_uuid"),
+        "empresa_id": company_id,
+        "slug": slug_n,
+        "version_uuid": published_version_uuid,
+        "version": version,
+    }
 
 
 def list_versions(company_id: int, area: str, categoria: str, slug: str) -> Dict[str, Any]:
@@ -657,12 +896,21 @@ def read_published_documents(
                 published_content = ""
 
         item = {
+            "document_uuid": meta.get("document_uuid"),
             "empresa_id": company_id,
             "slug": meta.get("slug"),
             "titulo": meta.get("title"),
             "area": meta.get("area"),
             "categoria": meta.get("categoria"),
             "tags": meta.get("tags", []),
+            "published_version_uuid": next(
+                (
+                    entry.get("version_uuid")
+                    for entry in meta.get("versions", [])
+                    if _version_matches(entry.get("version"), published_version)
+                ),
+                None,
+            ),
             "published_version": published_version,
             "created_at": meta.get("created_at"),
             "updated_at": meta.get("updated_at"),
@@ -725,10 +973,12 @@ def read_published_document_content(
             body = "\n".join(lines[closing + 1 :]).lstrip("\n")
 
     return {
+        "document_uuid": meta.get("document_uuid"),
         "empresa_id": company_id,
         "area": area_n,
         "categoria": categoria_n,
         "slug": slug_n,
+        "version_uuid": selected_entry.get("version_uuid"),
         "titulo": meta.get("title", slug_n),
         "tags": meta.get("tags", []),
         "versao": selected_version,

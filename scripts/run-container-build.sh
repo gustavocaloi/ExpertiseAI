@@ -12,5 +12,9 @@ if [ ! -f "$COMPOSE_FILE" ]; then
   exit 1
 fi
 
-docker compose -f "$COMPOSE_FILE" build --no-cache
+if ! docker compose -f "$COMPOSE_FILE" build --no-cache; then
+  echo "Fallback para build direto com docker (BuildKit/Bake falhou)."
+  docker build -t docker-expertise-ai -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+fi
+
 docker compose -f "$COMPOSE_FILE" up -d "$@"

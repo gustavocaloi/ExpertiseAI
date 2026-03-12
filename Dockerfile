@@ -19,7 +19,11 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    EXPAI_DATA_DIR=/app/data
+    EXPAI_DATA_DIR=/app/data \
+    HF_HOME=/app/data/docling_cache/huggingface \
+    HUGGINGFACE_HUB_CACHE=/app/data/docling_cache/huggingface \
+    DOCLING_CACHE_DIR=/app/data/docling_cache \
+    XDG_CACHE_HOME=/app/data/docling_cache
 
 ENV PATH="/opt/venv/bin:$PATH"
 
@@ -27,6 +31,7 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY app ./app
+RUN mkdir -p /app/data/docling_cache/huggingface
 
 EXPOSE 8000
 

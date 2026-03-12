@@ -422,6 +422,14 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
 }
 .items-list li.doc-item { cursor: pointer; }
 .items-list li.doc-item:hover { border-color: #c5ba9a; }
+.items-list li.doc-item-processing {
+  border-color: #d7d0bd;
+  background: #fbf8f1;
+}
+.items-list li.doc-item-failed {
+  border-color: #e2b0aa;
+  background: #fff4f2;
+}
 
 .timeline-list {
   list-style: none;
@@ -759,6 +767,22 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
 
 .items-list .meta {
   font-size: 0.85rem; color: var(--ink-soft); white-space: nowrap;
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.status-tag-failed {
+  color: #8c342f;
+  background: #fbe2dd;
+  border-color: #e2b0aa;
 }
 
 .checkrow {

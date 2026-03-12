@@ -1221,9 +1221,68 @@ async function apiFetch(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.detail || `Erro ${response.status}`;
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message));
+    const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
+    error.status = response.status;
+    error.data = data;
+    throw error;
   }
   return data;
+}
+
+async function waitForUploadJobCompletion(jobId, onProgress = null) {
+  const maxAttempts = 1800;
+  const delayMs = 1000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let payload = null;
+    try {
+      payload = await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/upload/${encodeURIComponent(jobId)}`);
+    } catch (error) {
+      const status = error?.status;
+      if (status === 404 || status === 410 || (status >= 400 && status < 500)) {
+        throw error;
+      }
+      if (attempt + 1 >= maxAttempts) {
+        throw error;
+      }
+      if (onProgress) {
+        const percent = Math.min(60 + Math.floor((attempt / maxAttempts) * 30), 90);
+        onProgress(
+          {
+            status: 'aguardando',
+            error: error?.message || String(error),
+          },
+          percent,
+          attempt + 1,
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    const status = (payload?.status || '').toLowerCase();
+
+    if (onProgress) {
+      const percent = Math.min(60 + Math.floor((attempt / maxAttempts) * 30), 90);
+      onProgress(payload, percent, attempt + 1);
+    }
+
+    if (status === 'done' && payload?.documento) {
+      return payload;
+    }
+
+    if (status === 'failed') {
+      throw new Error(payload?.error || 'Falha no processamento do documento.');
+    }
+
+    if (attempt + 1 >= maxAttempts) {
+      throw new Error('Tempo de processamento excedeu o limite. Tente novamente em alguns minutos.');
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+
+  throw new Error('Tempo de processamento excedeu o limite. Tente novamente em alguns minutos.');
 }
 
 document.getElementById('loginForm').addEventListener('submit', async (event) => {
@@ -1381,15 +1440,48 @@ async function loadPublishedDocs() {
   query.set('include_content', 'true');
 
   try {
-    const data = await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/publicados?${query.toString()}`);
+    const [data, processingData, failedData] = await Promise.all([
+      apiFetch(`/api/v1/empresas/${state.companyId}/documentos/publicados?${query.toString()}`),
+      apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=processing`),
+      apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=failed`),
+    ]);
     docsList.innerHTML = '';
+    const processingDocs = Array.isArray(processingData?.documentos) ? processingData.documentos : [];
+    const failedDocs = Array.isArray(failedData?.documentos) ? failedData.documentos : [];
+    const publishedDocs = Array.isArray(data.documentos) ? data.documentos : [];
 
-    if (!data.documentos?.length) {
+    if (!processingDocs.length && !failedDocs.length && !publishedDocs.length) {
       docsList.innerHTML = '<li>Nenhum documento publicado encontrado para essa busca.</li>';
       return;
     }
 
-    for (const doc of data.documentos) {
+    for (const doc of processingDocs) {
+      const item = document.createElement('li');
+      item.className = 'doc-item doc-item-processing';
+      item.innerHTML = `
+        <div>
+          <strong>⏳ ${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
+          <div class="meta">${doc?.area || 'sem-area'} / ${doc?.categoria || 'sem-categoria'} · Processando...</div>
+        </div>
+        <span class="meta">${doc?.job_id || ''} · Início: ${doc?.created_at || ''}</span>
+      `;
+      docsList.appendChild(item);
+    }
+
+    for (const doc of failedDocs) {
+      const item = document.createElement('li');
+      item.className = 'doc-item doc-item-failed';
+      item.innerHTML = `
+        <div>
+          <strong>${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
+          <div class="meta">${doc?.area || 'sem-area'} / ${doc?.categoria || 'sem-categoria'} · <span class="status-tag status-tag-failed">Falha</span></div>
+        </div>
+        <span class="meta">${doc?.error || 'Processamento interrompido.'}</span>
+      `;
+      docsList.appendChild(item);
+    }
+
+    for (const doc of publishedDocs) {
       const item = document.createElement('li');
       item.className = 'doc-item';
       item.tabIndex = 0;
@@ -1513,6 +1605,9 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
       if (baseVersion) {
         form.set('base_version', baseVersion);
       }
+      if (publicar) {
+        form.set('publicar', 'true');
+      }
       if (requestTagString) {
         form.set('tags', requestTagString);
       }
@@ -1526,6 +1621,17 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data?.detail || `Erro ${res.status}`);
+      }
+
+      if (data?.job_id) {
+        createMsg.textContent = `Arquivo enviado. O documento será processado em segundo plano${publicar ? ' e publicado ao finalizar' : ''}.`;
+        createMsg.className = 'helper success';
+        showToast('Upload recebido. Acompanhe o status na página inicial.', 'success');
+        showInlineCreateSession(false);
+        showSession('dashboardSession');
+        await loadPublishedDocs();
+        hideImportProgress('Upload recebido.');
+        return;
       }
 
       uploadedDoc = data?.documento || {};

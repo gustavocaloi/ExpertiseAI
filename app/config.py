@@ -15,6 +15,15 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("EXPAI_ACCESS_TOKEN_EXPIRE_MINUTES",
 ACCESS_CONTROL_ENABLED = os.getenv("EXPAI_ACCESS_CONTROL_ENABLED", "true").lower() in {"1", "true", "yes"}
 
 DOCLING_ENABLED = os.getenv("EXPAI_DOCLING_ENABLED", "true").lower() in {"1", "true", "yes"}
+DOCLING_CACHE_DIR = Path(os.getenv("DOCLING_CACHE_DIR", DATA_DIR / "docling_cache"))
+DOCLING_TIMEOUT_SECONDS = int(os.getenv("EXPAI_DOCLING_TIMEOUT_SECONDS", "600"))
+DOCLING_MAX_PAGES = int(os.getenv("EXPAI_DOCLING_MAX_PAGES", "250"))
+DOCLING_MAX_FILE_SIZE_MB = int(os.getenv("EXPAI_DOCLING_MAX_FILE_SIZE_MB", "50"))
+DOCLING_PDF_PAGE_BATCH_SIZE = int(os.getenv("EXPAI_DOCLING_PDF_PAGE_BATCH_SIZE", "25"))
+DOCLING_THREADS = int(os.getenv("EXPAI_DOCLING_THREADS", "2"))
+DOCLING_OCR_ENABLED = os.getenv("EXPAI_DOCLING_OCR_ENABLED", "true").lower() in {"1", "true", "yes"}
+DOCLING_TABLE_STRUCTURE_ENABLED = os.getenv("EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED", "true").lower() in {"1", "true", "yes"}
+DOCLING_PREFETCH_MODELS = os.getenv("EXPAI_DOCLING_PREFETCH_MODELS", "true").lower() in {"1", "true", "yes"}
 REBUILD_KB_ON_START = os.getenv("EXPAI_REBUILD_KB_ON_START", "false").lower() in {"1", "true", "yes"}
 
 BOOTSTRAP_DEFAULT_ADMIN = os.getenv("EXPAI_BOOTSTRAP_DEFAULT_ADMIN", "true").lower() in {"1", "true", "yes"}

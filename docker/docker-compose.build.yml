@@ -8,6 +8,10 @@ services:
       - ../.env
     environment:
       EXPAI_DATA_DIR: /app/data
+      DOCLING_CACHE_DIR: /app/data/docling_cache
+      HF_HOME: /app/data/docling_cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /app/data/docling_cache/huggingface
+      XDG_CACHE_HOME: /app/data/docling_cache
       EXPAI_ACCESS_CONTROL_ENABLED: "false"
       EXPAI_BOOTSTRAP_DEFAULT_ADMIN: "true"
       EXPAI_DEFAULT_COMPANY_NAME: Expertise.AI
@@ -21,6 +25,14 @@ services:
       EXPAI_JWT_ALGORITHM: HS256
       EXPAI_ACCESS_TOKEN_EXPIRE_MINUTES: "480"
       EXPAI_DOCLING_ENABLED: "true"
+      EXPAI_DOCLING_TIMEOUT_SECONDS: "1800"
+      EXPAI_DOCLING_MAX_PAGES: "600"
+      EXPAI_DOCLING_MAX_FILE_SIZE_MB: "50"
+      EXPAI_DOCLING_PDF_PAGE_BATCH_SIZE: "10"
+      EXPAI_DOCLING_THREADS: "2"
+      EXPAI_DOCLING_PREFETCH_MODELS: "true"
+      EXPAI_DOCLING_OCR_ENABLED: "false"
+      EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED: "false"
     ports:
       - "8000:8000"
     volumes:
