@@ -86,31 +86,47 @@
               <div class="panel-actions">
                 <button id="refreshDocs">Publicar novo documento</button>
               </div>
-              <div class="toolbar-meta">Filtro por área, categoria, tag e busca</div>
             </section>
 
             <section class="filters panel-compact">
               <label>
-                <span>Área</span>
-                <input type="text" id="filterArea" placeholder="suporte" />
+                <div class="sort-control__field">
+                  <select id="filterArea">
+                    <option value="">Todas as áreas</option>
+                  </select>
+                  <span class="sort-control__icon" aria-hidden="true">▾</span>
+                </div>
               </label>
               <label>
-                <span>Categoria</span>
-                <input type="text" id="filterCategoria" placeholder="processos" />
+                <div class="sort-control__field">
+                  <select id="filterCategoria">
+                    <option value="">Todas as categorias</option>
+                  </select>
+                  <span class="sort-control__icon" aria-hidden="true">▾</span>
+                </div>
+              </label>
+              <label class="sort-control">
+                <div class="sort-control__field">
+                  <select id="sortDocs">
+                    <option value="created_desc">Criação mais recente</option>
+                    <option value="created_asc">Criação mais antiga</option>
+                    <option value="area_asc">Área A-Z</option>
+                    <option value="categoria_asc">Categoria A-Z</option>
+                  </select>
+                  <span class="sort-control__icon" aria-hidden="true">▾</span>
+                </div>
               </label>
               <label>
-                <span>Tag</span>
-                <input type="text" id="filterTag" placeholder="onboarding" />
+                <input type="text" id="filterTag" placeholder="Tag" />
               </label>
               <label>
-                <span>Busca</span>
-                <input type="text" id="filterBusca" placeholder="termo" />
+                <input type="text" id="filterBusca" placeholder="Busca palavra" />
               </label>
             </section>
 
           <section class="actions-grid">
               <article class="action-card">
-                <h3>Publicados</h3>
+                <h3>Documentos</h3>
                 <ul id="docsList" class="items-list"></ul>
               </article>
             </section>
@@ -204,11 +220,17 @@
               <form id="createDocForm" class="vertical-form">
                 <label>
                   <span>Área</span>
-                  <select id="docArea"></select>
+                  <div class="sort-control__field">
+                    <select id="docArea"></select>
+                    <span class="sort-control__icon" aria-hidden="true">▾</span>
+                  </div>
                 </label>
                 <label>
                   <span>Categoria</span>
-                  <select id="docCategoria"></select>
+                  <div class="sort-control__field">
+                    <select id="docCategoria"></select>
+                    <span class="sort-control__icon" aria-hidden="true">▾</span>
+                  </div>
                 </label>
                 <label>
                   <span>Título</span>

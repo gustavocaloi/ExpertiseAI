@@ -70,6 +70,8 @@ const addAreaForm = document.getElementById('addAreaForm');
 const addCategoriaForm = document.getElementById('addCategoriaForm');
 const docArea = document.getElementById('docArea');
 const docCategoria = document.getElementById('docCategoria');
+const filterArea = document.getElementById('filterArea');
+const filterCategoria = document.getElementById('filterCategoria');
 const userAdminMenuItem = document.getElementById('userAdminMenuItem');
 const userAdminSession = document.getElementById('userAdminSession');
 const usersList = document.getElementById('usersList');
@@ -131,6 +133,43 @@ function contentPublishedOf(payload) {
     return Boolean(payload.conteudo_publicado);
   }
   return false;
+}
+
+function normalizeDocumentError(errorValue) {
+  if (!errorValue) {
+    return 'Processamento interrompido.';
+  }
+  if (typeof errorValue !== 'string') {
+    return String(errorValue);
+  }
+  const raw = errorValue.trim();
+  if (!raw) {
+    return 'Processamento interrompido.';
+  }
+  if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'string' && parsed.trim()) {
+        return parsed.trim();
+      }
+      if (Array.isArray(parsed)) {
+        const firstText = parsed.find((item) => typeof item === 'string' && item.trim());
+        if (firstText) {
+          return firstText.trim();
+        }
+      }
+      if (parsed && typeof parsed === 'object') {
+        const candidates = [parsed.error, parsed.message, parsed.detail, parsed.stderr, parsed.stdout];
+        const firstCandidate = candidates.find((item) => typeof item === 'string' && item.trim());
+        if (firstCandidate) {
+          return firstCandidate.trim();
+        }
+      }
+    } catch (_error) {
+      return raw;
+    }
+  }
+  return raw;
 }
 
 function setTaxonomySelectOptions() {
@@ -196,6 +235,32 @@ function renderTaxonomies() {
   renderTaxonomyList(areasList, state.taxonomies.areas, 'areas');
   renderTaxonomyList(categoriasList, state.taxonomies.categorias, 'categorias');
   setTaxonomySelectOptions();
+  if (filterArea) {
+    const currentArea = filterArea.value;
+    filterArea.innerHTML = '<option value="">Todas as áreas</option>';
+    state.taxonomies.areas.forEach((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      filterArea.appendChild(option);
+    });
+    if ([...filterArea.options].some((option) => option.value === currentArea)) {
+      filterArea.value = currentArea;
+    }
+  }
+  if (filterCategoria) {
+    const currentCategoria = filterCategoria.value;
+    filterCategoria.innerHTML = '<option value="">Todas as categorias</option>';
+    state.taxonomies.categorias.forEach((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      filterCategoria.appendChild(option);
+    });
+    if ([...filterCategoria.options].some((option) => option.value === currentCategoria)) {
+      filterCategoria.value = currentCategoria;
+    }
+  }
 }
 
 function renderTaxonomyError(message) {
@@ -1427,10 +1492,11 @@ if (userAdminMenuItem) {
 }
 
 async function loadPublishedDocs() {
-  const area = document.getElementById('filterArea').value;
-  const categoria = document.getElementById('filterCategoria').value;
+  const area = filterArea?.value || '';
+  const categoria = filterCategoria?.value || '';
   const tag = document.getElementById('filterTag').value;
   const busca = document.getElementById('filterBusca').value;
+  const sortBy = document.getElementById('sortDocs')?.value || 'created_desc';
 
   const query = new URLSearchParams();
   if (area) query.set('area', area);
@@ -1438,6 +1504,19 @@ async function loadPublishedDocs() {
   if (tag) query.set('tag', tag);
   if (busca) query.set('busca', busca);
   query.set('include_content', 'true');
+  const matchesDashboardFilters = (doc) => {
+    const docArea = String(doc?.area || '').toLowerCase();
+    const docCategoria = String(doc?.categoria || '').toLowerCase();
+    const docTitle = String(doc?.title || doc?.titulo || doc?.file_name || doc?.slug || '').toLowerCase();
+    const docError = String(doc?.error || '').toLowerCase();
+    const rawTags = Array.isArray(doc?.tags) ? doc.tags : String(doc?.tags || '').split(',');
+    const docTags = rawTags.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
+    const areaOk = !area || docArea === area.toLowerCase();
+    const categoriaOk = !categoria || docCategoria === categoria.toLowerCase();
+    const tagOk = !tag || docTags.some((item) => item.includes(tag.toLowerCase()));
+    const buscaOk = !busca || docTitle.includes(busca.toLowerCase()) || docError.includes(busca.toLowerCase());
+    return areaOk && categoriaOk && tagOk && buscaOk;
+  };
 
   try {
     const [data, processingData, failedData] = await Promise.all([
@@ -1446,59 +1525,102 @@ async function loadPublishedDocs() {
       apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=failed`),
     ]);
     docsList.innerHTML = '';
-    const processingDocs = Array.isArray(processingData?.documentos) ? processingData.documentos : [];
-    const failedDocs = Array.isArray(failedData?.documentos) ? failedData.documentos : [];
+    const processingDocs = (Array.isArray(processingData?.documentos) ? processingData.documentos : []).filter(matchesDashboardFilters);
+    const failedDocs = (Array.isArray(failedData?.documentos) ? failedData.documentos : []).filter(matchesDashboardFilters);
     const publishedDocs = Array.isArray(data.documentos) ? data.documentos : [];
+    const compareText = (left, right) => String(left || '').localeCompare(String(right || ''), 'pt-BR');
+    const resolveSortDate = (doc) => {
+      const candidates = [
+        doc?.created_at,
+        doc?.updated_at,
+        doc?.published_at,
+        doc?.finished_at,
+        doc?.started_at,
+      ];
+      for (const candidate of candidates) {
+        const timestamp = new Date(candidate || '').getTime();
+        if (!Number.isNaN(timestamp) && timestamp > 0) {
+          return timestamp;
+        }
+      }
+      return 0;
+    };
+    const compareDocDate = (left, right) => resolveSortDate(left) - resolveSortDate(right);
+    const sortDocs = (items) => {
+      const cloned = [...items];
+      if (sortBy === 'created_asc') {
+        return cloned.sort((a, b) => compareDocDate(a, b) || compareText(a?.area, b?.area) || compareText(a?.categoria, b?.categoria));
+      }
+      if (sortBy === 'area_asc') {
+        return cloned.sort((a, b) => compareText(a?.area, b?.area) || compareText(a?.categoria, b?.categoria) || compareDocDate(b, a));
+      }
+      if (sortBy === 'categoria_asc') {
+        return cloned.sort((a, b) => compareText(a?.categoria, b?.categoria) || compareText(a?.area, b?.area) || compareDocDate(b, a));
+      }
+      return cloned.sort((a, b) => compareDocDate(b, a) || compareText(a?.area, b?.area) || compareText(a?.categoria, b?.categoria));
+    };
+    const allDocs = [
+      ...processingDocs.map((doc) => ({ ...doc, _cardType: 'processing' })),
+      ...failedDocs.map((doc) => ({ ...doc, _cardType: 'failed' })),
+      ...publishedDocs.map((doc) => ({ ...doc, _cardType: 'published' })),
+    ];
+    const orderedDocs = sortDocs(allDocs);
 
-    if (!processingDocs.length && !failedDocs.length && !publishedDocs.length) {
+    if (!orderedDocs.length) {
       docsList.innerHTML = '<li>Nenhum documento publicado encontrado para essa busca.</li>';
       return;
     }
 
-    for (const doc of processingDocs) {
+    for (const doc of orderedDocs) {
       const item = document.createElement('li');
-      item.className = 'doc-item doc-item-processing';
-      item.innerHTML = `
-        <div>
-          <strong>⏳ ${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
-          <div class="meta">${doc?.area || 'sem-area'} / ${doc?.categoria || 'sem-categoria'} · Processando...</div>
-        </div>
-        <span class="meta">${doc?.job_id || ''} · Início: ${doc?.created_at || ''}</span>
-      `;
-      docsList.appendChild(item);
-    }
-
-    for (const doc of failedDocs) {
-      const item = document.createElement('li');
-      item.className = 'doc-item doc-item-failed';
-      item.innerHTML = `
-        <div>
-          <strong>${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
-          <div class="meta">${doc?.area || 'sem-area'} / ${doc?.categoria || 'sem-categoria'} · <span class="status-tag status-tag-failed">Falha</span></div>
-        </div>
-        <span class="meta">${doc?.error || 'Processamento interrompido.'}</span>
-      `;
-      docsList.appendChild(item);
-    }
-
-    for (const doc of publishedDocs) {
-      const item = document.createElement('li');
-      item.className = 'doc-item';
-      item.tabIndex = 0;
-      item.addEventListener('click', () => openDocumentModalFromPublished(doc));
-      item.addEventListener('keypress', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          openDocumentModalFromPublished(doc);
-        }
-      });
-      item.innerHTML = `
-        <div>
-          <strong>${docTitleOf(doc) || doc.slug}</strong>
-          <div class="meta">${doc.area} / ${doc.categoria}</div>
-        </div>
-        <span class="meta">v${docPublishedVersionOf(doc) || ''} · ${doc.updated_at || ''}</span>
-      `;
+      if (doc._cardType === 'processing') {
+        item.className = 'doc-item doc-item-processing';
+        item.innerHTML = `
+          <div class="doc-item-body">
+            <strong>⏳ ${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
+            <div class="meta doc-meta-tags">
+              <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
+              <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              <span class="status-tag status-tag-processing">Processando</span>
+            </div>
+          </div>
+          <span class="meta">${doc?.job_id || ''} · Início: ${doc?.created_at || ''}</span>
+        `;
+      } else if (doc._cardType === 'failed') {
+        const displayError = normalizeDocumentError(doc?.error);
+        item.className = 'doc-item doc-item-failed';
+        item.innerHTML = `
+          <div class="doc-item-body">
+            <strong>${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
+            <div class="meta doc-meta-tags">
+              <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
+              <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              <span class="status-tag status-tag-failed">Falha</span>
+            </div>
+          </div>
+          <span class="meta doc-error-text" title="${displayError}">${displayError}</span>
+        `;
+      } else {
+        item.className = 'doc-item';
+        item.tabIndex = 0;
+        item.addEventListener('click', () => openDocumentModalFromPublished(doc));
+        item.addEventListener('keypress', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openDocumentModalFromPublished(doc);
+          }
+        });
+        item.innerHTML = `
+          <div class="doc-item-body">
+            <strong>${docTitleOf(doc) || doc.slug}</strong>
+            <div class="meta doc-meta-tags">
+              <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
+              <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+            </div>
+          </div>
+          <span class="meta">v${docPublishedVersionOf(doc) || ''} · ${doc.updated_at || ''}</span>
+        `;
+      }
       docsList.appendChild(item);
     }
   } catch (error) {
@@ -1895,10 +2017,11 @@ document.getElementById('publishForm').addEventListener('submit', async (event) 
   }
 });
 
-document.getElementById('filterArea').addEventListener('change', loadPublishedDocs);
-document.getElementById('filterCategoria').addEventListener('change', loadPublishedDocs);
+filterArea?.addEventListener('change', loadPublishedDocs);
+filterCategoria?.addEventListener('change', loadPublishedDocs);
 document.getElementById('filterTag').addEventListener('change', loadPublishedDocs);
 document.getElementById('filterBusca').addEventListener('change', loadPublishedDocs);
+document.getElementById('sortDocs').addEventListener('change', loadPublishedDocs);
 
 docModalCloseBtn.addEventListener('click', closeDocumentModal);
 docModalOverlay.addEventListener('click', closeDocumentModal);

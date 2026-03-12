@@ -172,6 +172,15 @@ Este projeto já possui um esqueleto funcional em FastAPI com:
   - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/v{n}.md`
   - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/document.meta.json`
 
+### Limitação atual de versionamento
+
+- A identidade física do documento ainda é baseada em `empresa_id + area + categoria + slug`.
+- Na prática, `área` e `categoria` ainda fazem parte do path do documento em disco:
+  - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/`
+- Por isso, ao editar um documento existente e alterar apenas `área` ou `categoria`, o sistema atualmente cria um novo documento físico, em vez de apenas gerar uma nova versão do mesmo documento.
+- O comportamento esperado de negócio é diferente: `área` e `categoria` deveriam ser tratadas como metadados editáveis, sem trocar a identidade do documento.
+- Enquanto essa refatoração não for implementada, alterações de `área` ou `categoria` devem ser tratadas como criação de um novo documento no armazenamento.
+
 ### Como executar (desenvolvimento)
 
 Pré-requisitos:
