@@ -105,6 +105,34 @@ let isSlugAutoSuggestionEnabled = true;
 const FALLBACK_AREA = 'sem-area';
 const FALLBACK_CATEGORIA = 'sem-categoria';
 
+function docTitleOf(doc) {
+  return doc?.titulo || doc?.title || '';
+}
+
+function docPublishedVersionOf(doc) {
+  return doc?.published_version || doc?.versao_publicada || doc?.version || '';
+}
+
+function contentVersionOf(payload) {
+  return payload?.version || payload?.versao || payload?.content_version || payload?.conteudo_versao || '';
+}
+
+function contentPublishedOf(payload) {
+  if (payload?.published !== undefined) {
+    return Boolean(payload.published);
+  }
+  if (payload?.publicado !== undefined) {
+    return Boolean(payload.publicado);
+  }
+  if (payload?.content_published !== undefined) {
+    return Boolean(payload.content_published);
+  }
+  if (payload?.conteudo_publicado !== undefined) {
+    return Boolean(payload.conteudo_publicado);
+  }
+  return false;
+}
+
 function setTaxonomySelectOptions() {
   if (!docArea || !docCategoria) {
     return;
@@ -806,7 +834,7 @@ function renderEditHistory(meta) {
 
   editHistorySession.classList.remove('hidden-view');
   if (editHistoryHint) {
-    editHistoryHint.textContent = `Histórico completo de "${meta?.title || ''}".`;
+    editHistoryHint.textContent = `Histórico completo de "${docTitleOf(meta) || ''}".`;
   }
 }
 
@@ -822,7 +850,7 @@ function renderVersionPreview(version, payload) {
   versionPreviewContent.textContent = payload?.content || 'Não foi possível carregar o conteúdo desta versão.';
 
   const selected = getHistoryVersion(version);
-  const isPublished = selected?.published === true || payload?.published === true;
+  const isPublished = selected?.published === true || contentPublishedOf(payload);
   versionPublishToggle.checked = isPublished;
   versionPublishToggle.disabled = false;
   publishToggleInfo.textContent = `Publicar versão v${version}`;
@@ -840,7 +868,7 @@ function loadVersionForEdit(version) {
       area,
       categoria,
       slug,
-      title: editingDocumentContext.title || '',
+      title: docTitleOf(editingDocumentContext) || '',
       updated_at: editingDocumentContext.updated_at || '',
       published_version: selectedHistoryVersion,
     },
@@ -872,7 +900,7 @@ async function publishVersionFromToggle(version) {
       area: editingDocumentContext.area,
       categoria: editingDocumentContext.categoria,
       slug: editingDocumentContext.slug,
-      title: editingDocumentContext.title || '',
+      title: docTitleOf(editingDocumentContext) || '',
     };
     editingDocumentKey = null;
     await loadDocumentHistory(docMeta, true);
@@ -903,7 +931,7 @@ async function loadDocumentHistory(document, forceReload = false) {
     area: document.area,
     categoria: document.categoria,
     slug: document.slug,
-    title: document.title || '',
+    title: docTitleOf(document) || '',
   };
   selectedHistoryVersion = null;
   setTimelineActiveVersion(null);
@@ -922,14 +950,14 @@ async function loadDocumentHistory(document, forceReload = false) {
 function openDocumentModalFromPublished(doc, version = null, showPublishControls = false) {
   const targetVersion = version != null
     ? normalizeVersion(version)
-    : normalizeVersion(doc.published_version || doc.version || '');
+    : normalizeVersion(docPublishedVersionOf(doc) || doc.version || '');
   const fromHistory = Boolean(showPublishControls);
   selectedDocument = doc;
   selectedDocument = { ...selectedDocument, fromHistoryEdit: fromHistory };
   selectedDocument.version = targetVersion || null;
   const shouldShowPublish = Boolean(showPublishControls);
   const versionLabel = targetVersion ? `v${targetVersion}` : '-';
-  docModalTitle.textContent = doc.title || doc.slug;
+  docModalTitle.textContent = docTitleOf(doc) || doc.slug;
   docModalMeta.textContent = `${doc.area} / ${doc.categoria} · ${versionLabel} · ${doc.updated_at || ''}`;
   docModalContent.textContent = 'Carregando conteúdo...';
   docModal.setAttribute('aria-hidden', 'false');
@@ -955,19 +983,22 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
   apiFetch(url)
     .then((payload) => {
       docModalContent.textContent = payload?.content || 'Não foi possível carregar o conteúdo.';
-      if (payload?.version) {
-        selectedDocument = { ...selectedDocument, version: payload.version, published: Boolean(payload.published) };
-        docModalMeta.textContent = `${doc.area} / ${doc.categoria} · v${payload.version} · ${payload.updated_at || doc.updated_at || ''}`;
+      const payloadVersion = contentVersionOf(payload);
+      const payloadPublished = contentPublishedOf(payload);
+      if (payloadVersion) {
+        selectedDocument = { ...selectedDocument, version: payloadVersion, published: payloadPublished };
+        docModalMeta.textContent = `${doc.area} / ${doc.categoria} · v${payloadVersion} · ${payload.updated_at || doc.updated_at || ''}`;
         if (modalVersionPublishToggle) {
-          modalVersionPublishToggle.checked = Boolean(payload.published);
+          modalVersionPublishToggle.checked = payloadPublished;
           modalVersionPublishToggle.disabled = !shouldShowPublish;
         }
         if (modalPublishToggleInfo) {
-          modalPublishToggleInfo.textContent = `Publicar versão v${payload.version}`;
+          modalPublishToggleInfo.textContent = `Publicar versão v${payloadVersion}`;
         }
       }
-      if (payload?.title) {
-        selectedDocument = { ...selectedDocument, title: payload.title };
+      const payloadTitle = docTitleOf(payload);
+      if (payloadTitle) {
+        selectedDocument = { ...selectedDocument, title: payloadTitle };
       }
       if (payload?.tags) {
         selectedDocument = { ...selectedDocument, tags: payload.tags };
@@ -994,7 +1025,7 @@ function getPublishContext() {
       area: selectedDocument.area,
       categoria: selectedDocument.categoria,
       slug: selectedDocument.slug,
-      title: selectedDocument.title || '',
+      title: docTitleOf(selectedDocument) || '',
     };
   }
   return null;
@@ -1028,7 +1059,7 @@ async function publishVersionFromContext(version) {
       area: context.area,
       categoria: context.categoria,
       slug: context.slug,
-      title: context.title || '',
+      title: docTitleOf(context) || '',
     },
     true,
     );
@@ -1049,7 +1080,7 @@ function openCreateForSelectedDocument() {
   isSlugAutoSuggestionEnabled = false;
 
   const selectedVersion = normalizeVersion(selectedDocument.version) || null;
-  const targetVersion = selectedVersion || normalizeVersion(selectedDocument.published_version) || null;
+  const targetVersion = selectedVersion || normalizeVersion(selectedDocument.published_version || docPublishedVersionOf(selectedDocument)) || null;
   showToast(selectedVersion ? `Carregando versão ${selectedVersion} para edição...` : 'Carregando versão publicada para edição...');
 
   const query = new URLSearchParams();
@@ -1069,7 +1100,7 @@ function openCreateForSelectedDocument() {
   setFormSelectValue(docArea, selectedDocument.area || '');
   setFormSelectValue(docCategoria, selectedDocument.categoria || '');
   document.getElementById('docSlug').value = selectedDocument.slug || '';
-  document.getElementById('docTitle').value = selectedDocument.title || selectedDocument.slug || '';
+  document.getElementById('docTitle').value = docTitleOf(selectedDocument) || selectedDocument.slug || '';
   document.getElementById('docTags').value = (selectedDocument.tags || []).join(', ');
   const fileInput = document.getElementById('docFile');
   if (fileInput) {
@@ -1079,20 +1110,22 @@ function openCreateForSelectedDocument() {
   apiFetch(url)
     .then((payload) => {
       contentTarget.value = payload?.content || 'Não foi possível carregar o conteúdo desta versão.';
-      if (payload?.title) {
-        document.getElementById('docTitle').value = payload.title;
+      const payloadTitle = docTitleOf(payload);
+      if (payloadTitle) {
+        document.getElementById('docTitle').value = payloadTitle;
       }
       if (payload?.tags) {
         document.getElementById('docTags').value = payload.tags.join(', ');
       }
-      if (payload?.version) {
-        selectedDocument = { ...selectedDocument, version: payload.version };
+      const selectedVersion = contentVersionOf(payload);
+      if (selectedVersion) {
+        selectedDocument = { ...selectedDocument, version: selectedVersion };
       }
       loadDocumentHistory({
         area: payload?.area || selectedDocument.area || '',
         categoria: payload?.categoria || selectedDocument.categoria || '',
         slug: payload?.slug || selectedDocument.slug || '',
-        title: payload?.title || selectedDocument.title || selectedDocument.slug || '',
+        title: docTitleOf(payload) || docTitleOf(selectedDocument) || selectedDocument.slug || '',
       });
       showToast('Documento carregado para edição com sucesso. Você pode substituir o arquivo para gerar nova versão.');
     })
@@ -1102,7 +1135,7 @@ function openCreateForSelectedDocument() {
         area: selectedDocument.area || '',
         categoria: selectedDocument.categoria || '',
         slug: selectedDocument.slug || '',
-        title: selectedDocument.title || selectedDocument.slug || '',
+        title: docTitleOf(selectedDocument) || selectedDocument.slug || '',
       });
     });
 }
@@ -1345,6 +1378,7 @@ async function loadPublishedDocs() {
   if (categoria) query.set('categoria', categoria);
   if (tag) query.set('tag', tag);
   if (busca) query.set('busca', busca);
+  query.set('include_content', 'true');
 
   try {
     const data = await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/publicados?${query.toString()}`);
@@ -1368,10 +1402,10 @@ async function loadPublishedDocs() {
       });
       item.innerHTML = `
         <div>
-          <strong>${doc.title || doc.slug}</strong>
+          <strong>${docTitleOf(doc) || doc.slug}</strong>
           <div class="meta">${doc.area} / ${doc.categoria}</div>
         </div>
-        <span class="meta">v${doc.published_version} · ${doc.updated_at || ''}</span>
+        <span class="meta">v${docPublishedVersionOf(doc) || ''} · ${doc.updated_at || ''}</span>
       `;
       docsList.appendChild(item);
     }
@@ -1520,7 +1554,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
     if (docArea) setFormSelectValue(docArea, resolvedArea);
     if (docCategoria) setFormSelectValue(docCategoria, resolvedCategoria);
     if (docSlug) docSlug.value = resolvedSlug || '';
-    if (docTitle) docTitle.value = uploadedDoc?.title || title;
+    if (docTitle) docTitle.value = docTitleOf(uploadedDoc) || title;
 
     if (isFileUpload && docContent && uploadedVersion) {
       updateImportProgress(55, 'Baixando versão convertida...');

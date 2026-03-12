@@ -79,6 +79,7 @@ def list_published_documents(
         busca=busca,
         limit=limit,
         offset=offset,
+        include_content=True,
     )
     return {"empresa_id": company_id, "total": len(docs), "limit": limit, "offset": offset, "documentos": docs}
 
@@ -104,7 +105,10 @@ def create_document(
             is_published=payload.publicar,
             base_version=payload.base_version,
         )
-        return {"documento": doc}
+        document_payload = {**doc}
+        if document_payload.get("title") is not None and document_payload.get("titulo") is None:
+            document_payload["titulo"] = document_payload.get("title")
+        return {"documento": document_payload}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -222,7 +226,10 @@ async def upload_document(
             tags=tag_list,
             title=title,
         )
-        return {"documento": result}
+        documento_payload = {**result}
+        if documento_payload.get("title") is not None and documento_payload.get("titulo") is None:
+            documento_payload["titulo"] = documento_payload.get("title")
+        return {"documento": documento_payload}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -250,14 +257,38 @@ def list_document_versions(
     area: str,
     categoria: str,
     slug: str,
+    include_content: bool = Query(default=False),
+    version: Optional[str] = Query(default=None),
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
     try:
         meta = services.list_versions(company_id, area, categoria, slug)
-        return {"documento": meta}
+        if meta.get("title") is not None and meta.get("titulo") is None:
+            meta = {**meta, "titulo": meta.get("title")}
+        response = {"documento": meta}
+        if include_content:
+            content_payload = services.read_published_document_content(
+                company_id=company_id,
+                area=area,
+                categoria=categoria,
+                slug=slug,
+                version=version,
+            )
+            response["documento"] = {
+                **meta,
+                "content": content_payload.get("content", ""),
+                "conteudo_versao": content_payload.get("versao"),
+                "conteudo_publicado": bool(content_payload.get("publicado")),
+                # manter compatibilidade temporária durante migração
+                "content_version": content_payload.get("versao"),
+                "content_published": bool(content_payload.get("publicado")),
+            }
+        return response
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}/conteudo")

@@ -349,6 +349,7 @@ def read_published_documents(
     busca: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    include_content: bool = True,
 ) -> list[Dict[str, Any]]:
     root = Path(KB_ROOT) / str(company_id)
     if not root.exists():
@@ -374,19 +375,34 @@ def read_published_documents(
         if not published_version:
             continue
 
-        out.append(
-            {
-                "empresa_id": company_id,
-                "slug": meta.get("slug"),
-                "title": meta.get("title"),
-                "area": meta.get("area"),
-                "categoria": meta.get("categoria"),
-                "tags": meta.get("tags", []),
-                "published_version": published_version,
-                "created_at": meta.get("created_at"),
-                "updated_at": meta.get("updated_at"),
-            }
-        )
+        published_content = ""
+        if include_content:
+            try:
+                published_content = read_published_document_content(
+                    company_id=company_id,
+                    area=meta.get("area", ""),
+                    categoria=meta.get("categoria", ""),
+                    slug=meta.get("slug", ""),
+                    version=published_version,
+                ).get("content", "")
+            except (FileNotFoundError, ValueError, OSError):
+                published_content = ""
+
+        item = {
+            "empresa_id": company_id,
+            "slug": meta.get("slug"),
+            "titulo": meta.get("title"),
+            "area": meta.get("area"),
+            "categoria": meta.get("categoria"),
+            "tags": meta.get("tags", []),
+            "published_version": published_version,
+            "created_at": meta.get("created_at"),
+            "updated_at": meta.get("updated_at"),
+        }
+        if include_content:
+            item["content"] = published_content
+
+        out.append(item)
 
     out = sorted(out, key=lambda item: item["updated_at"] or "", reverse=True)
     return out[offset : offset + limit]
@@ -443,10 +459,10 @@ def read_published_document_content(
         "area": area_n,
         "categoria": categoria_n,
         "slug": slug_n,
-        "title": meta.get("title", slug_n),
+        "titulo": meta.get("title", slug_n),
         "tags": meta.get("tags", []),
-        "version": selected_version,
-        "published": bool(selected_entry.get("published")),
+        "versao": selected_version,
+        "publicado": bool(selected_entry.get("published")),
         "updated_at": meta.get("updated_at"),
         "content": body,
     }

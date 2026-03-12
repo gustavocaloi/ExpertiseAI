@@ -1,12 +1,14 @@
 services:
   expertise-ai:
-    image: lcaloi/expertiseai:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
     container_name: expertise-ai
     env_file:
-      - .env
+      - ../.env
     environment:
       EXPAI_DATA_DIR: /app/data
-      EXPAI_ACCESS_CONTROL_ENABLED: ${EXPAI_ACCESS_CONTROL_ENABLED:-false}
+      EXPAI_ACCESS_CONTROL_ENABLED: "false"
       EXPAI_BOOTSTRAP_DEFAULT_ADMIN: "true"
       EXPAI_DEFAULT_COMPANY_NAME: Expertise.AI
       EXPAI_DEFAULT_COMPANY_SLUG: expai
@@ -22,7 +24,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - expertise_ai_data:/app/data
+      - ../data:/app/data
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
       interval: 30s
@@ -30,6 +32,3 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
-
-volumes:
-  expertise_ai_data:
