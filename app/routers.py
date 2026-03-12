@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from . import db, services
-from .config import ACCESS_CONTROL_ENABLED, SUPER_ADMIN_USER
+from .config import ACCESS_CONTROL_ENABLED, DEFAULT_COMPANY_DESCRIPTION, DEFAULT_COMPANY_NAME, SUPER_ADMIN_USER
 from .security import TokenData, create_access_token, current_user, hash_password, require_company_access, require_role, verify_password
 
 
@@ -21,6 +21,7 @@ def _slugify(value: str) -> str:
 
 class CompanyCreatePayload(BaseModel):
     company_name: str
+    company_description: str = ""
     admin_name: str
     admin_email: str
     admin_password: str
@@ -38,6 +39,7 @@ class UserSessionResponse(BaseModel):
     role: str
     company_id: int
     company_name: str
+    company_description: str = ""
 
 
 class LoginPayload(BaseModel):
@@ -63,7 +65,7 @@ def _is_scoped_access_allowed(company_id: int, user: TokenData) -> None:
 @router.post("/empresas", status_code=201)
 def create_company(payload: CompanyCreatePayload):
     company_slug = _slugify(payload.company_name)
-    company_id = db.create_company(payload.company_name, company_slug)
+    company_id = db.create_company(payload.company_name, company_slug, payload.company_description)
     password_hash = hash_password(payload.admin_password)
     user_id = db.create_user(payload.admin_name, payload.admin_email, password_hash)
     db.assign_role_to_user(user_id, company_id, "admin")
@@ -79,7 +81,8 @@ def get_current_user(user: TokenData = Depends(current_user)):
             "email": user.email,
             "role": user.role,
             "company_id": user.company_id,
-            "company_name": "Empresa anônima",
+            "company_name": DEFAULT_COMPANY_NAME,
+            "company_description": DEFAULT_COMPANY_DESCRIPTION,
         }
 
     row = db.get_user_by_email(user.email)
@@ -99,6 +102,7 @@ def get_current_user(user: TokenData = Depends(current_user)):
         "role": role,
         "company_id": user.company_id,
         "company_name": company["name"],
+        "company_description": company["description"],
     }
 
 
@@ -152,6 +156,8 @@ def get_system_config():
     return {
         "access_control_enabled": ACCESS_CONTROL_ENABLED,
         "default_company_id": db.get_first_company_id(),
+        "default_company_name": DEFAULT_COMPANY_NAME,
+        "default_company_description": DEFAULT_COMPANY_DESCRIPTION,
         "super_admin_user": SUPER_ADMIN_USER,
     }
 

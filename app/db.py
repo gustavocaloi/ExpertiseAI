@@ -27,11 +27,15 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS companies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
                 slug TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL
             )
             """
         )
+        company_columns = {row["name"] for row in cur.execute("PRAGMA table_info(companies)").fetchall()}
+        if "description" not in company_columns:
+            cur.execute("ALTER TABLE companies ADD COLUMN description TEXT NOT NULL DEFAULT ''")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -99,13 +103,13 @@ def _taxonomy_normalize_name(name: str) -> str:
     return text or "categoria"
 
 
-def create_company(name: str, slug: str) -> int:
+def create_company(name: str, slug: str, description: str = "") -> int:
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO companies (name, slug, created_at) VALUES (?, ?, ?)",
-            (name, slug, _now()),
+            "INSERT INTO companies (name, description, slug, created_at) VALUES (?, ?, ?, ?)",
+            (name, description or "", slug, _now()),
         )
         conn.commit()
         return int(cursor.lastrowid)
@@ -113,14 +117,20 @@ def create_company(name: str, slug: str) -> int:
         conn.close()
 
 
-def ensure_company(company_id: int, company_name: str, company_slug: str) -> None:
+def ensure_company(company_id: int, company_name: str, company_slug: str, company_description: str = "") -> None:
     conn = get_connection()
     try:
         existing = conn.execute(
-            "SELECT id FROM companies WHERE id = ?",
+            "SELECT id, description FROM companies WHERE id = ?",
             (company_id,),
         ).fetchone()
         if existing:
+            if company_description and (existing["description"] or "") != company_description:
+                conn.execute(
+                    "UPDATE companies SET description = ? WHERE id = ?",
+                    (company_description, company_id),
+                )
+                conn.commit()
             return
 
         cleaned_slug = _taxonomy_normalize_name(company_slug)
@@ -131,8 +141,8 @@ def ensure_company(company_id: int, company_name: str, company_slug: str) -> Non
         while True:
             try:
                 conn.execute(
-                    "INSERT INTO companies (id, name, slug, created_at) VALUES (?, ?, ?, ?)",
-                    (company_id, company_name, current_slug, _now()),
+                    "INSERT INTO companies (id, name, description, slug, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (company_id, company_name, company_description or "", current_slug, _now()),
                 )
                 conn.commit()
                 return
@@ -325,6 +335,7 @@ def taxonomy_exists(company_id: int, kind: str, name: str) -> bool:
 
 def ensure_default_admin(
     company_name: str,
+    company_description: str,
     company_slug: str,
     admin_name: str,
     admin_email: str,
@@ -338,8 +349,8 @@ def ensure_default_admin(
 
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO companies (name, slug, created_at) VALUES (?, ?, ?)",
-            (company_name, company_slug, _now()),
+            "INSERT INTO companies (name, description, slug, created_at) VALUES (?, ?, ?, ?)",
+            (company_name, company_description or "", company_slug, _now()),
         )
         company_id = int(cur.lastrowid)
 

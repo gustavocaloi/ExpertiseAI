@@ -265,6 +265,7 @@ POST /api/v1/auth/login
 Ao iniciar a plataforma sem dados de base, é criado automaticamente um tenant padrão com admin padrão:
 
 - Empresa padrão: `EXPAI_DEFAULT_COMPANY_NAME` (slug `expai`)
+- Descrição padrão da empresa: `EXPAI_DEFAULT_COMPANY_DESCRIPTION`
 - Usuário padrão:
   - email: `admin@expertise.ai.local`
   - senha: `Admin@123`
@@ -272,6 +273,7 @@ Ao iniciar a plataforma sem dados de base, é criado automaticamente um tenant p
 Esses valores podem ser alterados por variáveis de ambiente:
 
 - `EXPAI_DEFAULT_COMPANY_NAME`
+- `EXPAI_DEFAULT_COMPANY_DESCRIPTION`
 - `EXPAI_DEFAULT_COMPANY_SLUG`
 - `EXPAI_DEFAULT_ADMIN_NAME`
 - `EXPAI_DEFAULT_ADMIN_EMAIL`

@@ -15,6 +15,7 @@ services:
       EXPAI_ACCESS_CONTROL_ENABLED: "false"
       EXPAI_BOOTSTRAP_DEFAULT_ADMIN: "true"
       EXPAI_DEFAULT_COMPANY_NAME: Expertise.AI
+      EXPAI_DEFAULT_COMPANY_DESCRIPTION: Base de Conhecimento por Expertise Operacional
       EXPAI_DEFAULT_COMPANY_SLUG: expai
       EXPAI_DEFAULT_ADMIN_NAME: Administrador Expertise.AI
       EXPAI_DEFAULT_ADMIN_EMAIL: admin@expertise.ai.local

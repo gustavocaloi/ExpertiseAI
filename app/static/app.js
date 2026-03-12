@@ -2,6 +2,8 @@ const state = {
   token: localStorage.getItem('expai_token') || '',
   companyId: localStorage.getItem('expai_company_id') || '',
   accessControlEnabled: true,
+  defaultCompanyName: '',
+  defaultCompanyDescription: '',
   profile: null,
   taxonomies: {
     areas: [],
@@ -33,6 +35,7 @@ const userMenuDropdown = document.getElementById('userMenuDropdown');
 const statusChip = document.getElementById('statusChip');
 const brandHomeLink = document.getElementById('brandHomeLink');
 const brandHomeWrap = document.querySelector('.brand-wrap');
+const brandSubtitle = document.getElementById('brandSubtitle');
 const loginMsg = document.getElementById('loginMsg');
 const createMsg = document.getElementById('createMsg');
 const publishMsg = document.getElementById('publishMsg');
@@ -303,7 +306,8 @@ function ensureAnonymousProfile() {
     email: 'anônimo',
     role: 'anônimo',
     company_id: companyId || 0,
-    company_name: companyId ? `empresa ${companyId}` : 'empresa',
+    company_name: state.defaultCompanyName || (companyId ? `empresa ${companyId}` : 'empresa'),
+    company_description: state.defaultCompanyDescription || '',
   };
   renderProfileToUi(state.profile);
   setPanelStatusText();
@@ -410,6 +414,8 @@ async function loadPlatformConfig() {
   try {
     const config = await apiFetch('/api/v1/config');
     state.accessControlEnabled = toBooleanValue(config?.access_control_enabled, true);
+    state.defaultCompanyName = config?.default_company_name || '';
+    state.defaultCompanyDescription = config?.default_company_description || '';
 
     if (!isAccessControlEnabled()) {
       const defaultCompanyId = config?.default_company_id;
@@ -426,6 +432,9 @@ async function loadPlatformConfig() {
         localStorage.setItem('expai_company_id', state.companyId);
       }
       ensureAnonymousProfile();
+      if (brandSubtitle) {
+        brandSubtitle.textContent = state.defaultCompanyName || state.defaultCompanyDescription || 'Expertise.AI';
+      }
     }
   } catch {
     state.accessControlEnabled = false;
@@ -514,7 +523,7 @@ function setStatus(text, ok = true) {
 function formatProfileLabel(profile) {
   const name = profile?.full_name || profile?.email || 'usuário';
   const role = profile?.role || 'sem perfil';
-  const company = profile?.company_name || `empresa ${state.companyId || '-'}`;
+  const company = profile?.company_name || state.defaultCompanyName || `empresa ${state.companyId || '-'}`;
   return `${name} · ${role} · ${company}`;
 }
 
@@ -551,6 +560,9 @@ function renderProfileToUi(profile = null) {
   if (profileCompany) {
     profileCompany.textContent = data.company_name || '-';
   }
+  if (brandSubtitle) {
+    brandSubtitle.textContent = data.company_name || state.defaultCompanyName || 'Expertise.AI';
+  }
   if (userAvatar) {
     userAvatar.textContent = getInitials(data);
   }
@@ -561,6 +573,9 @@ function setPanelStatusText() {
     setStatus(formatProfileLabel(state.profile));
     renderProfileToUi(state.profile);
     return;
+  }
+  if (brandSubtitle) {
+    brandSubtitle.textContent = state.defaultCompanyName || state.defaultCompanyDescription || 'Expertise.AI';
   }
   setStatus('sem sessão de usuário');
 }

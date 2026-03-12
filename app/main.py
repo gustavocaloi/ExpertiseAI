@@ -15,6 +15,7 @@ from .config import (
     DEFAULT_ADMIN_EMAIL,
     DEFAULT_ADMIN_NAME,
     DEFAULT_ADMIN_PASSWORD,
+    DEFAULT_COMPANY_DESCRIPTION,
     DEFAULT_COMPANY_NAME,
     DEFAULT_COMPANY_SLUG,
     REBUILD_KB_ON_START,
@@ -38,6 +39,7 @@ def create_app() -> FastAPI:
     if BOOTSTRAP_DEFAULT_ADMIN:
         db.ensure_default_admin(
             company_name=DEFAULT_COMPANY_NAME,
+            company_description=DEFAULT_COMPANY_DESCRIPTION,
             company_slug=DEFAULT_COMPANY_SLUG,
             admin_name=DEFAULT_ADMIN_NAME,
             admin_email=DEFAULT_ADMIN_EMAIL,

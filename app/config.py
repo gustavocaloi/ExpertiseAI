@@ -28,6 +28,7 @@ REBUILD_KB_ON_START = os.getenv("EXPAI_REBUILD_KB_ON_START", "false").lower() in
 
 BOOTSTRAP_DEFAULT_ADMIN = os.getenv("EXPAI_BOOTSTRAP_DEFAULT_ADMIN", "true").lower() in {"1", "true", "yes"}
 DEFAULT_COMPANY_NAME = os.getenv("EXPAI_DEFAULT_COMPANY_NAME", "Expertise.AI")
+DEFAULT_COMPANY_DESCRIPTION = os.getenv("EXPAI_DEFAULT_COMPANY_DESCRIPTION", "Base de Conhecimento por Expertise Operacional")
 DEFAULT_COMPANY_SLUG = os.getenv("EXPAI_DEFAULT_COMPANY_SLUG", "expai")
 DEFAULT_ADMIN_NAME = os.getenv("EXPAI_DEFAULT_ADMIN_NAME", "Administrador Expertise.AI")
 DEFAULT_ADMIN_EMAIL = os.getenv("EXPAI_DEFAULT_ADMIN_EMAIL", "admin@expertise.ai.local")
