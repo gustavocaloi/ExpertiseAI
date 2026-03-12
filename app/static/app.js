@@ -1480,6 +1480,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
   const publicar = Boolean(docPublish?.checked);
   const normalizedArea = area || FALLBACK_AREA;
   const normalizedCategoria = categoria || FALLBACK_CATEGORIA;
+  const baseVersion = normalizeVersion(selectedDocument?.version || selectedDocument?.published_version || selectedDocument?.versao_publicada || '');
 
   if (docSlug && !docSlug.value.trim() && generatedSlug) {
     docSlug.value = generatedSlug;
@@ -1509,6 +1510,9 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
       if (title) {
         form.set('title', title);
       }
+      if (baseVersion) {
+        form.set('base_version', baseVersion);
+      }
       if (requestTagString) {
         form.set('tags', requestTagString);
       }
@@ -1534,6 +1538,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
         title,
         content,
         tags,
+        ...(baseVersion ? { base_version: baseVersion } : {}),
         publicar,
       };
 

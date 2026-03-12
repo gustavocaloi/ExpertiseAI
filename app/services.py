@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import json
+import asyncio
 import re
 import time
 from datetime import datetime
@@ -418,7 +419,11 @@ def create_or_update_text_document(
         meta["tags"] = list(tags) if tags else meta.get("tags", [])
 
     if base_version is not None:
-        version = _extract_next_patch_version(meta, base_version)
+        base_version_value = str(base_version).strip()
+        if base_version_value:
+            version = _extract_next_patch_version(meta, base_version_value)
+        else:
+            version = _extract_next_version(meta)
     else:
         version = _extract_next_version(meta)
     version_meta = {
@@ -482,6 +487,7 @@ async def import_file_to_markdown(
     area: Optional[str],
     categoria: Optional[str],
     slug: Optional[str],
+    base_version: Optional[str],
     file: UploadFile,
     author_email: str,
     tags: Iterable[str] = (),
@@ -510,36 +516,45 @@ async def import_file_to_markdown(
         content=converted,
         author_email=author_email,
         tags=tags,
+        base_version=base_version,
         is_published=False,
     )
 
 
-async def _convert_to_markdown_with_docling(raw: bytes, filename: str) -> str:
+def _convert_to_markdown_with_docling_sync(raw: bytes, filename: str) -> str:
     temp_dir = Path(KB_ROOT) / "_tmp_uploads"
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_file = temp_dir / filename
-    with temp_file.open("wb") as f:
-        f.write(raw)
-
     try:
-        from docling.document_converter import DocumentConverter
-    except Exception as e:  # pragma: no cover
-        raise ValueError(
-            "Integração com docling não disponível. Instale a dependência docling."
-        ) from e
+        with temp_file.open("wb") as f:
+            f.write(raw)
 
-    converter = DocumentConverter()
-    result = converter.convert(str(temp_file))
+        try:
+            from docling.document_converter import DocumentConverter
+        except Exception as e:  # pragma: no cover
+            raise ValueError(
+                "Integração com docling não disponível. Instale a dependência docling."
+            ) from e
 
-    document = getattr(result, "document", None)
-    if document is None:
-        raise ValueError("Falha ao converter arquivo com docling.")
+        converter = DocumentConverter()
+        result = converter.convert(str(temp_file))
 
-    if hasattr(document, "export_to_markdown"):
-        return document.export_to_markdown()
-    if hasattr(document, "to_markdown"):
-        return document.to_markdown()
-    raise ValueError("Conversor docling sem método conhecido de exportação.")
+        document = getattr(result, "document", None)
+        if document is None:
+            raise ValueError("Falha ao converter arquivo com docling.")
+
+        if hasattr(document, "export_to_markdown"):
+            return document.export_to_markdown()
+        if hasattr(document, "to_markdown"):
+            return document.to_markdown()
+        raise ValueError("Conversor docling sem método conhecido de exportação.")
+    finally:
+        if temp_file.exists():
+            temp_file.unlink(missing_ok=True)
+
+
+async def _convert_to_markdown_with_docling(raw: bytes, filename: str) -> str:
+    return await asyncio.to_thread(_convert_to_markdown_with_docling_sync, raw, filename)
 
 
 def set_published_version(
