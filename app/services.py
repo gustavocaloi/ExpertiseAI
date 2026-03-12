@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import errno
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union
 
 from fastapi import UploadFile
 
+from . import db
 from .config import KB_ROOT, DOCLING_ENABLED
+
+
+_VERSION_FILE_RE = re.compile(r"^v(.+)\\.md$")
+_IO_MAX_RETRIES = 3
+_IO_RETRY_DELAY_SECONDS = 0.05
 
 
 def _sanitize(value: str) -> str:
@@ -105,6 +113,238 @@ def _extract_next_patch_version(meta: Dict[str, Any], base_version: Union[str, i
     ]
     max_minor = max(same_major) if same_major else 0
     return f"{base_major}.{max_minor + 1}"
+
+
+def _safe_parse_frontmatter(markdown: str) -> Dict[str, str]:
+    lines = markdown.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+
+    output: Dict[str, str] = {}
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        output[key.strip()] = value.strip()
+    return output
+
+
+def _safe_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _safe_tags(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_values = [str(v) for v in value]
+    else:
+        text = str(value).strip()
+        if not text:
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        raw_values = text.split(",")
+    tags: list[str] = []
+    for item in raw_values:
+        clean = str(item).strip().strip("\"\'")
+        if clean and clean not in tags:
+            tags.append(clean)
+    return tags
+
+
+def _safe_str(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def _read_text_with_retry(
+    path: Path,
+    encoding: str = "utf-8",
+    errors: str = "strict",
+) -> Optional[str]:
+    for _ in range(_IO_MAX_RETRIES):
+        try:
+            return path.read_text(encoding=encoding, errors=errors)
+        except OSError as exc:
+            if exc.errno == errno.EWOULDBLOCK:
+                time.sleep(_IO_RETRY_DELAY_SECONDS)
+                continue
+            raise
+    return None
+
+
+def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]:
+    root = Path(KB_ROOT)
+    if not root.exists():
+        return {
+            "scanned": 0,
+            "created": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "companies_created": 0,
+            "companies_seen": 0,
+            "taxonomies_created": 0,
+        }
+
+    companies_seen: set[int] = set()
+    summary = {
+        "scanned": 0,
+        "created": 0,
+        "updated": 0,
+        "skipped": 0,
+        "errors": 0,
+        "companies_created": 0,
+        "companies_seen": 0,
+        "taxonomies_created": 0,
+    }
+
+    for version_file in root.rglob("v*.md"):
+        if "_tmp_uploads" in version_file.parts:
+            continue
+
+        if not version_file.is_file():
+            continue
+
+        match = _VERSION_FILE_RE.match(version_file.name)
+        if not match:
+            continue
+
+        relative = version_file.relative_to(root)
+        if len(relative.parts) < 5:
+            continue
+
+        company_id_str, area, categoria, slug = relative.parts[:4]
+        if not company_id_str.isdigit():
+            continue
+
+        company_id = int(company_id_str)
+        doc_dir = version_file.parent
+        meta_path = doc_dir / "document.meta.json"
+
+        if meta_path.exists() and not force:
+            summary["skipped"] += 1
+            continue
+
+        try:
+            versions: list[Dict[str, Any]] = []
+            for file in sorted(doc_dir.glob("v*.md")):
+                file_match = _VERSION_FILE_RE.match(file.name)
+                if not file_match:
+                    continue
+
+                version_value = file_match.group(1)
+                content = _read_text_with_retry(file, encoding="utf-8", errors="ignore")
+                if content is None:
+                    raise OSError(errno.EWOULDBLOCK, "Resource temporarily unavailable")
+                metadata = _safe_parse_frontmatter(content)
+                version = _version_display(metadata.get("version") or version_value)
+                created_at = _safe_str(metadata.get("created_at")) or _now()
+                updated_at = _safe_str(metadata.get("updated_at")) or created_at
+                published = _safe_bool(metadata.get("published"))
+                published_at = _safe_str(metadata.get("published_at")) if published else ""
+
+                versions.append(
+                    {
+                        "version": version,
+                        "file": file.name,
+                        "author": _safe_str(metadata.get("author")) or "anônimo",
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                        "published": published,
+                        "published_at": published_at,
+                        "tags": metadata.get("tags", ""),
+                    }
+                )
+
+            if not versions:
+                summary["skipped"] += 1
+                continue
+
+            versions = sorted(versions, key=lambda item: _version_key(item["version"]))
+            first_version = versions[0]
+            latest_version = versions[-1]
+
+            published_entries = [item for item in versions if item.get("published")]
+            if published_entries:
+                selected = max(published_entries, key=lambda item: _version_key(item["version"]))
+                published_version = str(selected["version"])
+            else:
+                published_version = str(latest_version["version"])
+
+            created_times = [item["created_at"] for item in versions if item.get("created_at")]
+            updated_times = [item["updated_at"] for item in versions if item.get("updated_at")]
+            created_at = min(created_times) if created_times else _now()
+            updated_at = max(updated_times) if updated_times else _now()
+
+            merged_tags: list[str] = []
+            for item in versions:
+                for tag in _safe_tags(item.get("tags", "")):
+                    if tag not in merged_tags:
+                        merged_tags.append(tag)
+
+            for version in versions:
+                if _version_matches(version["version"], published_version):
+                    version["published"] = True
+                    version["published_at"] = version.get("published_at") or _now()
+                    break
+
+            first_metadata = _safe_parse_frontmatter(
+                first_version["file"] and (_read_text_with_retry(
+                    doc_dir / first_version["file"],
+                    encoding="utf-8",
+                    errors="ignore",
+                ) or "")
+            )
+
+            meta = {
+                "slug": slug,
+                "title": _safe_str(first_metadata.get("title")) or _safe_str(first_version.get("title")) or slug,
+                "empresa_id": company_id,
+                "area": area,
+                "categoria": categoria,
+                "tags": merged_tags,
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "published_version": published_version,
+                "versions": [
+                    {
+                        "version": item["version"],
+                        "file": item["file"],
+                        "author": item["author"],
+                        "created_at": item["created_at"],
+                        "published": item["published"],
+                        "published_at": item.get("published_at"),
+                    }
+                    for item in versions
+                ],
+            }
+
+            was_missing = not meta_path.exists()
+            _write_meta(meta_path, meta)
+            summary["scanned"] += 1
+            if was_missing:
+                summary["created"] += 1
+            else:
+                summary["updated"] += 1
+
+            if company_id not in companies_seen:
+                if db.get_company(company_id) is None:
+                    db.ensure_company(company_id, company_name=f"Empresa {company_id}", company_slug=f"empresa-{company_id}")
+                    summary["companies_created"] += 1
+                companies_seen.add(company_id)
+                summary["companies_seen"] += 1
+
+            db.create_taxonomy(company_id, "area", area)
+            summary["taxonomies_created"] += 1
+            db.create_taxonomy(company_id, "categoria", categoria)
+            summary["taxonomies_created"] += 1
+        except Exception:
+            summary["errors"] += 1
+
+    return summary
 
 
 def _version_matches(a: Any, b: Any) -> bool:
@@ -357,8 +597,21 @@ def read_published_documents(
 
     out: list[Dict[str, Any]] = []
     for meta_file in root.rglob("document.meta.json"):
-        with meta_file.open("r", encoding="utf-8") as f:
-            meta = json.load(f)
+        meta: Optional[Dict[str, Any]] = None
+        for attempt in range(3):
+            try:
+                with meta_file.open("r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                break
+            except (json.JSONDecodeError, OSError) as exc:
+                if isinstance(exc, OSError) and exc.errno == errno.EWOULDBLOCK and attempt < 2:
+                    time.sleep(0.05)
+                    continue
+                meta = None
+                break
+
+        if meta is None:
+            continue
 
         if area and meta.get("area") != _sanitize(area):
             continue
@@ -440,7 +693,9 @@ def read_published_document_content(
     if not version_path.exists():
         raise FileNotFoundError("Arquivo da versão não encontrado")
 
-    full_content = version_path.read_text(encoding="utf-8")
+    full_content = _read_text_with_retry(version_path, encoding="utf-8", errors="strict")
+    if full_content is None:
+        raise OSError(errno.EWOULDBLOCK, "Resource temporarily unavailable")
 
     # retorna apenas o corpo do markdown (sem front matter) para visualização
     lines = full_content.splitlines()

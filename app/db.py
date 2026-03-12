@@ -113,6 +113,39 @@ def create_company(name: str, slug: str) -> int:
         conn.close()
 
 
+def ensure_company(company_id: int, company_name: str, company_slug: str) -> None:
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM companies WHERE id = ?",
+            (company_id,),
+        ).fetchone()
+        if existing:
+            return
+
+        cleaned_slug = _taxonomy_normalize_name(company_slug)
+        if not cleaned_slug:
+            cleaned_slug = f"empresa-{company_id}"
+
+        current_slug = cleaned_slug
+        while True:
+            try:
+                conn.execute(
+                    "INSERT INTO companies (id, name, slug, created_at) VALUES (?, ?, ?, ?)",
+                    (company_id, company_name, current_slug, _now()),
+                )
+                conn.commit()
+                return
+            except Exception as exc:
+                message = str(exc).lower()
+                if "companies.slug" in message:
+                    current_slug = f"{cleaned_slug}-{_now()}".replace(":", "-")
+                    continue
+                raise
+    finally:
+        conn.close()
+
+
 def get_company(company_id: int) -> Optional[sqlite3.Row]:
     conn = get_connection()
     try:

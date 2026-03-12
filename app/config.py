@@ -15,6 +15,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("EXPAI_ACCESS_TOKEN_EXPIRE_MINUTES",
 ACCESS_CONTROL_ENABLED = os.getenv("EXPAI_ACCESS_CONTROL_ENABLED", "true").lower() in {"1", "true", "yes"}
 
 DOCLING_ENABLED = os.getenv("EXPAI_DOCLING_ENABLED", "true").lower() in {"1", "true", "yes"}
+REBUILD_KB_ON_START = os.getenv("EXPAI_REBUILD_KB_ON_START", "false").lower() in {"1", "true", "yes"}
 
 BOOTSTRAP_DEFAULT_ADMIN = os.getenv("EXPAI_BOOTSTRAP_DEFAULT_ADMIN", "true").lower() in {"1", "true", "yes"}
 DEFAULT_COMPANY_NAME = os.getenv("EXPAI_DEFAULT_COMPANY_NAME", "Expertise.AI")

@@ -311,5 +311,7 @@ def get_published_document_content(
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=f"Recurso temporariamente indisponível: {str(exc)}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

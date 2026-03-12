@@ -5,7 +5,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from . import db
+from . import db, services
 from .config import ACCESS_CONTROL_ENABLED, SUPER_ADMIN_USER
 from .security import TokenData, create_access_token, current_user, hash_password, require_company_access, require_role, verify_password
 
@@ -153,4 +153,13 @@ def get_system_config():
         "access_control_enabled": ACCESS_CONTROL_ENABLED,
         "default_company_id": db.get_first_company_id(),
         "super_admin_user": SUPER_ADMIN_USER,
+    }
+
+
+@router.post("/admin/rebuild-documents")
+def rebuild_documents_metadata(force: bool = False, user: TokenData = Depends(require_role("admin"))):
+    _ = user
+    return {
+        "status": "ok",
+        "result": services.rebuild_documents_from_markdown_files(force=force),
     }

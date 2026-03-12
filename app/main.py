@@ -6,9 +6,17 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import db, services
 from . import kb_routes, routers
-from .config import BOOTSTRAP_DEFAULT_ADMIN, DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_NAME, DEFAULT_ADMIN_PASSWORD, DEFAULT_COMPANY_NAME, DEFAULT_COMPANY_SLUG
+from .config import (
+    BOOTSTRAP_DEFAULT_ADMIN,
+    DEFAULT_ADMIN_EMAIL,
+    DEFAULT_ADMIN_NAME,
+    DEFAULT_ADMIN_PASSWORD,
+    DEFAULT_COMPANY_NAME,
+    DEFAULT_COMPANY_SLUG,
+    REBUILD_KB_ON_START,
+)
 from .security import hash_password
 
 
@@ -26,6 +34,10 @@ def create_app() -> FastAPI:
             admin_email=DEFAULT_ADMIN_EMAIL,
             admin_password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
         )
+
+    if REBUILD_KB_ON_START:
+        services.rebuild_documents_from_markdown_files(force=False)
+
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     app.include_router(routers.router, prefix="/api/v1")
     app.include_router(kb_routes.router, prefix="/api/v1")
