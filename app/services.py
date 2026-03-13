@@ -598,6 +598,34 @@ def create_or_update_text_document(
     }
 
 
+def delete_document(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+) -> dict[str, Any]:
+    area_n = _sanitize(area)
+    categoria_n = _sanitize(categoria)
+    slug_n = _sanitize(slug)
+    doc_dir = _doc_dir(company_id, area_n, categoria_n, slug_n)
+    if not doc_dir.exists():
+        raise FileNotFoundError("Documento não encontrado")
+    shutil.rmtree(doc_dir)
+    logger.info(
+        "Documento removido: empresa=%s area=%s categoria=%s slug=%s",
+        company_id,
+        area_n,
+        categoria_n,
+        slug_n,
+    )
+    return {
+        "empresa_id": company_id,
+        "area": area_n,
+        "categoria": categoria_n,
+        "slug": slug_n,
+    }
+
+
 async def import_file_to_markdown(
     company_id: int,
     area: Optional[str],

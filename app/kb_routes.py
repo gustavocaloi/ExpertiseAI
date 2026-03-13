@@ -182,6 +182,39 @@ def cleanup_zombie_upload_jobs() -> int:
     return cleaned
 
 
+def _delete_matching_upload_jobs(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+) -> int:
+    normalized_area = services._sanitize(area or services.DEFAULT_AREA)
+    normalized_categoria = services._sanitize(categoria or services.DEFAULT_CATEGORIA)
+    normalized_slug = services._sanitize(slug or services.DEFAULT_SLUG)
+    removed = 0
+    for path in list(_UPLOAD_JOBS_DIR.glob("*.json")) if _UPLOAD_JOBS_DIR.exists() else []:
+        payload = _load_upload_job(path.stem)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("empresa_id") != company_id:
+            continue
+        if services._sanitize(str(payload.get("area") or services.DEFAULT_AREA)) != normalized_area:
+            continue
+        if services._sanitize(str(payload.get("categoria") or services.DEFAULT_CATEGORIA)) != normalized_categoria:
+            continue
+        if services._sanitize(str(payload.get("slug") or services.DEFAULT_SLUG)) != normalized_slug:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            logger.exception("Falha ao excluir job persistido %s", path.stem)
+            continue
+        _UPLOAD_JOBS.pop(path.stem, None)
+        _ACTIVE_UPLOAD_JOBS.discard(path.stem)
+        removed += 1
+    return removed
+
+
 def _assert_company_taxonomies(
     company_id: int,
     area: Optional[str],
@@ -249,6 +282,43 @@ def create_document(
         return {"documento": document_payload}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}")
+def delete_document(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+    user: TokenData = Depends(require_role("admin")),
+):
+    _is_scoped_access_allowed(company_id, user)
+    deleted_jobs = _delete_matching_upload_jobs(company_id, area, categoria, slug)
+    deleted_document = None
+    try:
+        deleted_document = services.delete_document(company_id, area, categoria, slug)
+    except FileNotFoundError:
+        deleted_document = None
+    if not deleted_document and not deleted_jobs:
+        raise HTTPException(status_code=404, detail="Documento não encontrado")
+    logger.info(
+        "Exclusão solicitada: empresa=%s area=%s categoria=%s slug=%s jobs_removidos=%s documento_removido=%s",
+        company_id,
+        area,
+        categoria,
+        slug,
+        deleted_jobs,
+        bool(deleted_document),
+    )
+    return {
+        "message": "Documento excluído com sucesso.",
+        "empresa_id": company_id,
+        "area": services._sanitize(area),
+        "categoria": services._sanitize(categoria),
+        "slug": services._sanitize(slug),
+        "removed_jobs": deleted_jobs,
+        "removed_document": bool(deleted_document),
+    }
 
 
 @router.get("/empresas/{company_id}/areas")

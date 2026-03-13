@@ -175,6 +175,45 @@ function normalizeDocumentError(errorValue) {
   return raw;
 }
 
+function canDeleteDocumentCard() {
+  return !isAccessControlEnabled() || isAdminProfile();
+}
+
+async function handleDeleteDocument(doc) {
+  const area = doc?.area || FALLBACK_AREA;
+  const categoria = doc?.categoria || FALLBACK_CATEGORIA;
+  const slug = doc?.slug || '';
+  const title = doc?.title || doc?.titulo || doc?.file_name || slug || 'documento';
+  if (!slug) {
+    showToast('Não foi possível identificar o slug do documento para exclusão.', 'error');
+    return;
+  }
+  const confirmed = window.confirm(`Excluir "${title}"? Esta ação remove o documento da listagem.`);
+  if (!confirmed) {
+    return;
+  }
+  await apiFetch(`/api/v1/empresas/${state.companyId}/documentos/${encodeURIComponent(area)}/${encodeURIComponent(categoria)}/${encodeURIComponent(slug)}`, {
+    method: 'DELETE',
+  });
+  if (docModal?.classList.contains('open') && selectedDocument?.slug === slug) {
+    closeDocModal();
+  }
+  showToast('Documento excluído com sucesso.');
+  await loadPublishedDocs();
+}
+
+function openDocumentEditorFromCard(doc) {
+  if (!doc || !doc.area || !doc.categoria || !doc.slug) {
+    showToast('Documento sem contexto suficiente para edição.', 'error');
+    return;
+  }
+  selectedDocument = {
+    ...doc,
+    title: docTitleOf(doc) || doc.slug,
+  };
+  openCreateForSelectedDocument();
+}
+
 function setTaxonomySelectOptions() {
   if (!docArea || !docCategoria) {
     return;
@@ -676,6 +715,18 @@ function setPanel(authenticated) {
 function closeDocumentModal() {
   docModal.classList.remove('open');
   docModal.setAttribute('aria-hidden', 'true');
+  if (docModalEditBtn) {
+    docModalEditBtn.classList.remove('hidden-view');
+  }
+  if (docModalTitle) {
+    docModalTitle.textContent = 'Visualizar documento';
+  }
+  if (docModalMeta) {
+    docModalMeta.textContent = '';
+  }
+  if (docModalContent) {
+    docModalContent.textContent = 'Selecione um documento para visualizar.';
+  }
   if (modalVersionPublishToggle) {
     modalVersionPublishToggle.checked = false;
     modalVersionPublishToggle.disabled = true;
@@ -683,6 +734,28 @@ function closeDocumentModal() {
   if (modalPublishToggleInfo) {
     modalPublishToggleInfo.textContent = 'Publicar esta versão';
   }
+}
+
+function openFailureDetailsModal(doc) {
+  const displayError = normalizeDocumentError(doc?.error);
+  selectedDocument = null;
+  if (docModalTitle) {
+    docModalTitle.textContent = 'Detalhes da falha';
+  }
+  if (docModalMeta) {
+    docModalMeta.textContent = `${doc?.title || doc?.file_name || doc?.slug || 'Documento'} · ${doc?.area || 'sem-area'} / ${doc?.categoria || 'sem-categoria'}`;
+  }
+  if (docModalContent) {
+    docModalContent.textContent = displayError;
+  }
+  if (docModalEditBtn) {
+    docModalEditBtn.classList.add('hidden-view');
+  }
+  if (modalPublishToggleWrap) {
+    modalPublishToggleWrap.classList.add('hidden-view');
+  }
+  docModal.setAttribute('aria-hidden', 'false');
+  docModal.classList.add('open');
 }
 
 function hideUserMenu() {
@@ -1037,6 +1110,9 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
   selectedDocument.version = targetVersion || null;
   const shouldShowPublish = Boolean(showPublishControls);
   const versionLabel = targetVersion ? `v${targetVersion}` : '-';
+  if (docModalEditBtn) {
+    docModalEditBtn.classList.remove('hidden-view');
+  }
   docModalTitle.textContent = docTitleOf(doc) || doc.slug;
   docModalMeta.textContent = `${doc.area} / ${doc.categoria} · ${versionLabel} · ${doc.updated_at || ''}`;
   docModalContent.textContent = 'Carregando conteúdo...';
@@ -1602,7 +1678,6 @@ async function loadPublishedDocs() {
           <span class="meta">${doc?.job_id || ''} · Início: ${doc?.created_at || ''}</span>
         `;
       } else if (doc._cardType === 'failed') {
-        const displayError = normalizeDocumentError(doc?.error);
         item.className = 'doc-item doc-item-failed';
         item.innerHTML = `
           <div class="doc-item-body">
@@ -1610,11 +1685,16 @@ async function loadPublishedDocs() {
             <div class="meta doc-meta-tags">
               <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
               <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
-              <span class="status-tag status-tag-failed">Falha</span>
+              <button type="button" class="status-tag status-tag-failed">Falha</button>
             </div>
           </div>
-          <span class="meta doc-error-text" title="${displayError}">${displayError}</span>
         `;
+        const failedBadge = item.querySelector('.status-tag-failed');
+        failedBadge?.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openFailureDetailsModal(doc);
+        });
       } else {
         item.className = 'doc-item';
         item.tabIndex = 0;
@@ -1636,6 +1716,51 @@ async function loadPublishedDocs() {
           <span class="meta">v${docPublishedVersionOf(doc) || ''} · ${doc.updated_at || ''}</span>
         `;
       }
+      const deleteWrap = document.createElement('div');
+      deleteWrap.className = 'doc-card-actions';
+      const editButton = document.createElement('button');
+      editButton.type = 'button';
+      editButton.className = 'doc-card-action';
+      editButton.textContent = '✎';
+      const editDisabled = doc._cardType !== 'published';
+      editButton.disabled = editDisabled;
+      if (editDisabled) {
+        editButton.title = 'A edição está disponível apenas para documentos já publicados.';
+      } else {
+        editButton.title = 'Editar documento';
+        editButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openDocumentEditorFromCard(doc);
+        });
+      }
+      deleteWrap.appendChild(editButton);
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'doc-card-action';
+      deleteButton.textContent = '🗑';
+      const deleteDisabled = doc._cardType === 'processing' || !doc?.slug || !canDeleteDocumentCard();
+      deleteButton.disabled = deleteDisabled;
+      if (doc._cardType === 'processing') {
+        deleteButton.title = 'A exclusão não está disponível enquanto o documento estiver em processamento.';
+      } else if (!doc?.slug) {
+        deleteButton.title = 'Documento sem identificador para exclusão.';
+      } else if (!canDeleteDocumentCard()) {
+        deleteButton.title = 'Somente administradores podem excluir documentos.';
+      } else {
+        deleteButton.title = 'Excluir documento';
+        deleteButton.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          try {
+            await handleDeleteDocument(doc);
+          } catch (error) {
+            showToast(error.message || 'Falha ao excluir documento.', 'error');
+          }
+        });
+      }
+      deleteWrap.appendChild(deleteButton);
+      item.appendChild(deleteWrap);
       docsList.appendChild(item);
     }
   } catch (error) {

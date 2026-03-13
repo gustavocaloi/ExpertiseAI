@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -18,9 +19,27 @@ from .config import (
     DEFAULT_COMPANY_DESCRIPTION,
     DEFAULT_COMPANY_NAME,
     DEFAULT_COMPANY_SLUG,
+    LOG_LEVEL,
     REBUILD_KB_ON_START,
 )
 from .security import hash_password
+
+
+def _configure_logging() -> None:
+    level_name = LOG_LEVEL.strip().upper()
+    aliases = {
+        "WARN": "WARNING",
+        "ERRO": "ERROR",
+    }
+    resolved_name = aliases.get(level_name, level_name)
+    resolved_level = getattr(logging, resolved_name, logging.INFO)
+    logging.basicConfig(
+        level=resolved_level,
+        format="%(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
+        logging.getLogger(logger_name).setLevel(resolved_level)
 
 
 async def _upload_jobs_cleanup_loop() -> None:
@@ -30,6 +49,7 @@ async def _upload_jobs_cleanup_loop() -> None:
 
 
 def create_app() -> FastAPI:
+    _configure_logging()
     app = FastAPI(title="Expertise.AI", version="0.1.0")
     static_dir = Path(__file__).resolve().parent / "static"
     static_dir.mkdir(parents=True, exist_ok=True)

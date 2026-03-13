@@ -8,6 +8,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("EXPAI_DATA_DIR", ROOT_DIR / "data"))
 DB_PATH = Path(os.getenv("EXPAI_DB_PATH", DATA_DIR / "system.sqlite3"))
 KB_ROOT = Path(os.getenv("EXPAI_KB_ROOT", DATA_DIR / "kb_store"))
+LOG_LEVEL = os.getenv("EXPAI_LOG_LEVEL", "INFO").strip().upper()
 
 SECRET_KEY = os.getenv("EXPAI_SECRET_KEY", "change-me")
 ALGORITHM = os.getenv("EXPAI_JWT_ALGORITHM", "HS256")
