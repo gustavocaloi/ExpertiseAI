@@ -3,8 +3,14 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
+
+
+APP_ROOT = Path(__file__).resolve().parent.parent
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 
 
 def _minimal_pdf_bytes() -> bytes:
