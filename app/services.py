@@ -19,6 +19,7 @@ from fastapi import UploadFile
 from . import db
 from .config import (
     KB_ROOT,
+    DOCLING_BUNDLED_CACHE_DIR,
     DOCLING_CACHE_DIR,
     DOCLING_ENABLED,
     DOCLING_MAX_FILE_SIZE_MB,
@@ -43,6 +44,7 @@ _DOCLING_THREADS = max(1, DOCLING_THREADS)
 _DOCLING_WORKER_PATH = Path(__file__).resolve().parent / "docling_worker.py"
 logger = logging.getLogger(__name__)
 _HF_CACHE_DIR = DOCLING_CACHE_DIR / "huggingface"
+_BUNDLED_HF_CACHE_DIR = DOCLING_BUNDLED_CACHE_DIR / "huggingface"
 
 
 def _prepare_docling_cache() -> None:
@@ -56,6 +58,26 @@ def _prepare_docling_cache() -> None:
     os.environ["OMP_NUM_THREADS"] = str(_DOCLING_THREADS)
     os.environ["MKL_NUM_THREADS"] = str(_DOCLING_THREADS)
     logger.info("Docling cache configurado: hf=%s cache=%s", _HF_CACHE_DIR, DOCLING_CACHE_DIR)
+
+
+def _runtime_docling_cache_has_files() -> bool:
+    return _HF_CACHE_DIR.exists() and any(_HF_CACHE_DIR.iterdir())
+
+
+def _bundled_docling_cache_has_files() -> bool:
+    return _BUNDLED_HF_CACHE_DIR.exists() and any(_BUNDLED_HF_CACHE_DIR.iterdir())
+
+
+def _restore_docling_cache_from_bundle() -> bool:
+    if _runtime_docling_cache_has_files() or not _bundled_docling_cache_has_files():
+        return False
+    logger.info(
+        "Restaurando cache empacotado do docling de %s para %s",
+        DOCLING_BUNDLED_CACHE_DIR,
+        DOCLING_CACHE_DIR,
+    )
+    shutil.copytree(DOCLING_BUNDLED_CACHE_DIR, DOCLING_CACHE_DIR, dirs_exist_ok=True)
+    return True
 
 
 def _sanitize(value: str) -> str:
@@ -148,6 +170,22 @@ def _should_retry_docling_artifacts(stderr_text: str, stdout_text: str) -> bool:
         "missing safe tensors file" in message
         or "downloading detection model" in message
         or "downloading recognition model" in message
+        or "appropriate snapshot folder" in message
+    )
+
+
+def _is_missing_hf_snapshot_error(stderr_text: str, stdout_text: str) -> bool:
+    message = f"{stderr_text}\n{stdout_text}".lower()
+    return "appropriate snapshot folder" in message
+
+
+def _missing_hf_snapshot_message() -> str:
+    return (
+        "Falha ao carregar os modelos locais do Docling/Hugging Face. "
+        "Este container foi iniciado sem acesso aos snapshots necessários para PDF. "
+        "Rebuild a imagem com internet para empacotar os modelos ou execute o primeiro start "
+        "com conectividade para popular o cache em "
+        f"{DOCLING_CACHE_DIR}."
     )
 
 
@@ -157,18 +195,22 @@ def ensure_docling_models_ready(force: bool = False) -> None:
 
     if force:
         _clear_docling_runtime_cache()
-        return
-
     _prepare_docling_cache()
+    _restore_docling_cache_from_bundle()
 
 
 async def ensure_docling_models_ready_async() -> None:
     if not DOCLING_ENABLED or not DOCLING_PREFETCH_MODELS:
         return
-    logger.info(
-        "Esta versão do docling fará download dos modelos sob demanda no primeiro processamento; "
-        "o cache persistente ficará em %s.",
+    await asyncio.to_thread(ensure_docling_models_ready)
+    if _runtime_docling_cache_has_files():
+        logger.info("Cache do docling pronto em %s.", DOCLING_CACHE_DIR)
+        return
+    logger.warning(
+        "Nenhum modelo local do docling foi encontrado em %s e não há bundle em %s. "
+        "O primeiro processamento de PDF exigirá acesso à internet.",
         DOCLING_CACHE_DIR,
+        DOCLING_BUNDLED_CACHE_DIR,
     )
 
 
@@ -782,6 +824,8 @@ async def _run_docling_worker_once(file_path: str, filename: str, allow_retry: b
                 f"Falha ao converter arquivo com docling (returncode={process.returncode}, "
                 f"size={file_size_bytes}, sem stdout/stderr)."
             )
+        if _is_missing_hf_snapshot_error(stderr_text, stdout_text):
+            raise ValueError(_missing_hf_snapshot_message())
         raise ValueError(error_message)
 
     try:

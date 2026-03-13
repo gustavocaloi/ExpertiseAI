@@ -211,6 +211,16 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
+### Modelos Docling offline no container
+
+- A variável `EXPAI_DOCLING_PREFETCH_MODELS` controla o modo offline dos modelos usados pelo `docling` no processamento de PDF.
+- Em build de imagem, `EXPAI_DOCLING_PREFETCH_MODELS=true` faz o download dos modelos durante o `docker build` e os empacota dentro da imagem.
+- No startup do container, esse bundle é restaurado para `/app/data/docling_cache` quando o volume de dados estiver vazio.
+- Com isso, o processamento de PDF pode funcionar sem internet na máquina de destino.
+- Se `EXPAI_DOCLING_PREFETCH_MODELS=false`, a imagem não empacota os modelos e o primeiro processamento de PDF dependerá de acesso à internet para popular o cache.
+- No compose com imagem publicada (`docker/docker-compose.yml`), a variável documenta essa expectativa operacional, mas o comportamento offline real depende de a imagem já ter sido buildada/publicada com o prefetch habilitado.
+- Se a máquina tiver internet apenas via proxy, configure `HTTP_PROXY`, `HTTPS_PROXY` e `NO_PROXY`. No compose de build, essas variáveis são repassadas tanto para o `docker build` quanto para o runtime do container.
+
 URL de acesso:
 
 - http://127.0.0.1:8000

@@ -17,6 +17,7 @@ ACCESS_CONTROL_ENABLED = os.getenv("EXPAI_ACCESS_CONTROL_ENABLED", "true").lower
 
 DOCLING_ENABLED = os.getenv("EXPAI_DOCLING_ENABLED", "true").lower() in {"1", "true", "yes"}
 DOCLING_CACHE_DIR = Path(os.getenv("DOCLING_CACHE_DIR", DATA_DIR / "docling_cache"))
+DOCLING_BUNDLED_CACHE_DIR = Path(os.getenv("EXPAI_DOCLING_BUNDLED_CACHE_DIR", "/opt/docling-models"))
 DOCLING_TIMEOUT_SECONDS = int(os.getenv("EXPAI_DOCLING_TIMEOUT_SECONDS", "600"))
 DOCLING_MAX_PAGES = int(os.getenv("EXPAI_DOCLING_MAX_PAGES", "250"))
 DOCLING_MAX_FILE_SIZE_MB = int(os.getenv("EXPAI_DOCLING_MAX_FILE_SIZE_MB", "50"))

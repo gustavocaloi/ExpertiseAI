@@ -3,6 +3,14 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        # Controla se a imagem deve empacotar os modelos do Docling/Hugging Face
+        # durante o build para processamento de PDF em modo offline no container.
+        EXPAI_DOCLING_PREFETCH_MODELS: "true"
+        # Proxy opcional para o docker build e para o prefetch dos modelos.
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     container_name: expertise-ai
     env_file:
       - ../.env
@@ -12,6 +20,10 @@ services:
       HF_HOME: /app/data/docling_cache/huggingface
       HUGGINGFACE_HUB_CACHE: /app/data/docling_cache/huggingface
       XDG_CACHE_HOME: /app/data/docling_cache
+      # Proxy opcional para downloads e chamadas HTTP feitas pelo container.
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
       EXPAI_ACCESS_CONTROL_ENABLED: "false"
       EXPAI_BOOTSTRAP_DEFAULT_ADMIN: "true"
       EXPAI_DEFAULT_COMPANY_NAME: Expertise.AI
@@ -32,6 +44,9 @@ services:
       EXPAI_DOCLING_MAX_FILE_SIZE_MB: "50"
       EXPAI_DOCLING_PDF_PAGE_BATCH_SIZE: "10"
       EXPAI_DOCLING_THREADS: "2"
+      # Mantida explícita para documentar a intenção operacional:
+      # "true" = prepara/restaura cache local para uso offline do container.
+      # "false" = permite download sob demanda, exigindo internet no primeiro PDF.
       EXPAI_DOCLING_PREFETCH_MODELS: "true"
       EXPAI_DOCLING_OCR_ENABLED: "false"
       EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED: "false"
