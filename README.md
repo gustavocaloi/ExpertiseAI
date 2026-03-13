@@ -223,6 +223,13 @@ docker compose ps
 docker compose down
 ```
 
+Limites operacionais do container:
+
+- Os composes do projeto limitam o serviço `expertise-ai` em:
+  - `memory: 6g`
+  - `cpus: 2.0`
+- Esses limites foram definidos para manter o container estável durante conversão de PDF/DOCX com `docling`, reduzindo o risco de o processo web competir com a conversão pesada.
+
 Persistência:
 
 - O volume `expertise_ai_data` armazena:
@@ -234,6 +241,42 @@ Para resetar o estado dos dados (sem excluir código):
 ```bash
 docker compose down -v
 ```
+
+### Referência operacional para processamento de PDF
+
+Baseado no histórico real deste projeto, com a configuração atual:
+
+- `EXPAI_DOCLING_PDF_PAGE_BATCH_SIZE=10`
+- `EXPAI_DOCLING_OCR_ENABLED=false`
+- `EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED=false`
+- `EXPAI_DOCLING_THREADS=2`
+
+Observações confirmadas:
+
+- PDF pequeno concluiu com sucesso no container após os ajustes de chunking e redução de custo do pipeline.
+- Um PDF de `359` páginas e aproximadamente `4 MB` chegou a falhar antes com `returncode=-9`, o que é compatível com `SIGKILL/OOM` no subprocesso do `docling`.
+- Após ativar chunking real, batch de `10` páginas e desabilitar OCR/tabelas, o processamento grande voltou a funcionar de forma estável no ambiente atual.
+
+Guia prático de capacidade:
+
+- até `50` páginas:
+  - tende a operar bem com `2 GB` a `3 GB` de RAM
+  - `1` a `2` vCPUs
+- de `50` a `200` páginas:
+  - recomenda-se `4 GB` de RAM
+  - `2` vCPUs
+- de `200` a `400` páginas:
+  - recomenda-se `6 GB` de RAM
+  - `2` vCPUs
+  - manter chunking em `10` páginas por lote
+- acima de `400` páginas:
+  - exige validação no ambiente real
+  - pode requerer aumento de memória, redução adicional do batch ou processamento dedicado fora do processo web
+
+Importante:
+
+- Esses números não são benchmark científico; são uma referência operacional inferida a partir do comportamento observado nos logs e da estabilização obtida com os ajustes atuais.
+- Se OCR ou estrutura de tabelas forem reativados, a necessidade de CPU e memória sobe significativamente.
 
 ### Endpoints principais
 

@@ -35,6 +35,8 @@ services:
       EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED: "false"
     ports:
       - "8000:8000"
+    mem_limit: 6g
+    cpus: 2.0
     volumes:
       - expertise_ai_data:/app/data
     healthcheck:
@@ -43,6 +45,11 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 6g
+          cpus: "2.0"
     restart: unless-stopped
 
 volumes:

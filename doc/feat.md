@@ -22,3 +22,7 @@
 
 ## LOG
 - [x] Criada a variável de ambiente `EXPAI_LOG_LEVEL` para controlar o nível global de logs (`INFO`, `WARN`, `ERRO`, `DEBUG`). O bootstrap da aplicação agora configura o root logger e os loggers do `uvicorn` com esse nível.
+
+## Infra / Operação
+- [x] Aplicados limites de CPU e memória nos composes do projeto: `6g` de RAM e `2.0` CPUs.
+- [x] Documentada no `README` uma referência operacional de capacidade para processamento de PDFs por faixa de páginas, baseada no histórico observado do projeto.
