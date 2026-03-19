@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import UploadFile, File, Form
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import db, services
 from .config import ACCESS_CONTROL_ENABLED, DATA_DIR
@@ -29,9 +29,10 @@ class DocumentCreatePayload(BaseModel):
     area: Optional[str] = None
     categoria: Optional[str] = None
     slug: Optional[str] = None
-    title: str
+    title: str = Field(..., min_length=1, max_length=256)
     content: str
     tags: list[str] = []
+    ai_prompt: Optional[str] = None
     base_version: Union[str, None] = None
     publicar: bool = False
 
@@ -42,6 +43,11 @@ class PublishPayload(BaseModel):
 
 class TaxonomyPayload(BaseModel):
     name: str
+
+
+class CategoryPayload(BaseModel):
+    name: str
+    area: str
 
 
 def _is_scoped_access_allowed(company_id: int, user: TokenData) -> None:
@@ -220,29 +226,32 @@ def _assert_company_taxonomies(
     area: Optional[str],
     categoria: Optional[str],
 ) -> None:
-    area_normalized = (area or "").strip()
-    categoria_normalized = (categoria or "").strip()
+    area_normalized = services._sanitize(area or "")
+    categoria_normalized = services._sanitize(categoria or "")
     fallback_area = services.DEFAULT_AREA
     fallback_categoria = services.DEFAULT_CATEGORIA
     if area_normalized and area_normalized not in {fallback_area, ""} and not db.taxonomy_exists(company_id, "area", area_normalized):
         raise HTTPException(status_code=400, detail="Área não cadastrada para esta empresa.")
-    if categoria_normalized and categoria_normalized not in {fallback_categoria, ""} and not db.taxonomy_exists(company_id, "categoria", categoria_normalized):
-        raise HTTPException(status_code=400, detail="Categoria não cadastrada para esta empresa.")
+    if categoria_normalized and categoria_normalized not in {fallback_categoria, ""}:
+        if not db.taxonomy_exists(company_id, "categoria", categoria_normalized, area=area_normalized):
+            raise HTTPException(status_code=400, detail="Categoria não cadastrada para esta área.")
 
 
-@router.get("/empresas/{company_id}/documentos/publicados")
-def list_published_documents(
+@router.get("/empresas/{company_id}/documentos", tags=["documentos"])
+def list_documents(
     company_id: int,
     area: Optional[str] = None,
     categoria: Optional[str] = None,
     tag: Optional[str] = None,
     busca: Optional[str] = None,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="created_desc"),
+    include_content: bool = Query(default=False),
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
-    docs = services.read_published_documents(
+    payload = services.read_published_documents(
         company_id=company_id,
         area=area,
         categoria=categoria,
@@ -250,12 +259,71 @@ def list_published_documents(
         busca=busca,
         limit=limit,
         offset=offset,
-        include_content=True,
+        include_content=include_content,
+        sort_by=sort,
+        return_total=True,
     )
-    return {"empresa_id": company_id, "total": len(docs), "limit": limit, "offset": offset, "documentos": docs}
+    if isinstance(payload, dict):
+        return {
+            "empresa_id": company_id,
+            "total": payload.get("total", 0),
+            "limit": limit,
+            "offset": offset,
+            "documentos": payload.get("items", []),
+        }
+    return {
+        "empresa_id": company_id,
+        "total": len(payload),
+        "limit": limit,
+        "offset": offset,
+        "documentos": payload,
+    }
 
 
-@router.post("/empresas/{company_id}/documentos")
+@router.get("/empresas/{company_id}/documentos/publicados", tags=["documentos"])
+def list_published_documents(
+    company_id: int,
+    area: Optional[str] = None,
+    categoria: Optional[str] = None,
+    tag: Optional[str] = None,
+    busca: Optional[str] = None,
+    limit: int = Query(default=10, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="created_desc"),
+    include_content: bool = Query(default=False),
+    user: TokenData = Depends(require_company_access),
+):
+    _is_scoped_access_allowed(company_id, user)
+    payload = services.read_published_documents(
+        company_id=company_id,
+        area=area,
+        categoria=categoria,
+        tag=tag,
+        busca=busca,
+        limit=limit,
+        offset=offset,
+        include_content=include_content,
+        sort_by=sort,
+        return_total=True,
+    )
+    if isinstance(payload, dict):
+        return {
+            "empresa_id": company_id,
+            "total": payload.get("total", 0),
+            "limit": limit,
+            "offset": offset,
+            "documentos": payload.get("items", []),
+        }
+    return {
+        "empresa_id": company_id,
+        "total": len(payload),
+        "limit": limit,
+        "offset": offset,
+        "documentos": payload,
+    }
+
+
+@router.post("/empresas/{company_id}/documentos", tags=["documentos"])
 def create_document(
     company_id: int,
     payload: DocumentCreatePayload,
@@ -273,6 +341,7 @@ def create_document(
             content=payload.content,
             author_email=_author_email(user),
             tags=payload.tags,
+            ai_prompt=payload.ai_prompt,
             is_published=payload.publicar,
             base_version=payload.base_version,
         )
@@ -284,7 +353,7 @@ def create_document(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.delete("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}")
+@router.delete("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}", tags=["documentos"])
 def delete_document(
     company_id: int,
     area: str,
@@ -321,7 +390,7 @@ def delete_document(
     }
 
 
-@router.get("/empresas/{company_id}/areas")
+@router.get("/empresas/{company_id}/areas", tags=["areas"])
 def list_company_areas(
     company_id: int,
     user: TokenData = Depends(require_company_access),
@@ -334,7 +403,7 @@ def list_company_areas(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.post("/empresas/{company_id}/areas")
+@router.post("/empresas/{company_id}/areas", tags=["areas"])
 def create_company_area(
     company_id: int,
     payload: TaxonomyPayload,
@@ -351,7 +420,7 @@ def create_company_area(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.delete("/empresas/{company_id}/areas")
+@router.delete("/empresas/{company_id}/areas", tags=["areas"])
 def delete_company_area(
     company_id: int,
     name: str = Query(..., min_length=1),
@@ -365,7 +434,7 @@ def delete_company_area(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.get("/empresas/{company_id}/categorias")
+@router.get("/empresas/{company_id}/categorias", tags=["categorias"])
 def list_company_categories(
     company_id: int,
     user: TokenData = Depends(require_company_access),
@@ -378,38 +447,45 @@ def list_company_categories(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.post("/empresas/{company_id}/categorias")
+@router.post("/empresas/{company_id}/categorias", tags=["categorias"])
 def create_company_category(
     company_id: int,
-    payload: TaxonomyPayload,
+    payload: CategoryPayload,
     user: TokenData = Depends(require_role("admin", "editor")),
 ):
     _is_scoped_access_allowed(company_id, user)
     name = payload.name.strip()
+    area = payload.area.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nome da categoria é obrigatório.")
+    if not area:
+        raise HTTPException(status_code=400, detail="Área é obrigatória para cadastrar categoria.")
     try:
-        created = db.create_taxonomy(company_id, "categoria", name)
+        created = db.create_taxonomy(company_id, "categoria", name, parent_area=area)
         return {"categoria": created}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.delete("/empresas/{company_id}/categorias")
+@router.delete("/empresas/{company_id}/categorias", tags=["categorias"])
 def delete_company_category(
     company_id: int,
     name: str = Query(..., min_length=1),
+    area: Optional[str] = Query(default=None),
     user: TokenData = Depends(require_role("admin", "editor")),
 ):
     _is_scoped_access_allowed(company_id, user)
     try:
-        db.delete_taxonomy(company_id, "categoria", name)
+        if area is not None:
+            db.delete_taxonomy(company_id, "categoria", name, area=area)
+        else:
+            db.delete_taxonomy(company_id, "categoria", name)
         return {"status": "removida"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.post("/empresas/{company_id}/documentos/upload")
+@router.post("/empresas/{company_id}/documentos/upload", tags=["upload"])
 async def upload_document(
     company_id: int,
     area: Optional[str] = Form(default=None),
@@ -418,6 +494,7 @@ async def upload_document(
     base_version: Optional[str] = Form(default=None),
     publicar: bool = Form(default=False),
     title: str = Form(None),
+    ai_prompt: Optional[str] = Form(default=None),
     tags: str = Form(""),
     file: UploadFile = File(...),
     user: TokenData = Depends(require_role("admin", "editor")),
@@ -471,6 +548,7 @@ async def upload_document(
                     author_email=_author_email(user),
                     tags=tag_list,
                     title=title,
+                    ai_prompt=ai_prompt,
                 )
                 documento_payload = {**result}
                 if documento_payload.get("title") is not None and documento_payload.get("titulo") is None:
@@ -512,7 +590,7 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.get("/empresas/{company_id}/documentos/upload/{job_id}")
+@router.get("/empresas/{company_id}/documentos/upload/{job_id}", tags=["upload"])
 def upload_document_status(
     company_id: int,
     job_id: str,
@@ -525,7 +603,7 @@ def upload_document_status(
     return job
 
 
-@router.get("/empresas/{company_id}/documentos/processando")
+@router.get("/empresas/{company_id}/documentos/processando", tags=["upload"])
 def list_processing_uploads(
     company_id: int,
     status: Optional[str] = Query(default=None),
@@ -541,7 +619,7 @@ def list_processing_uploads(
     }
 
 
-@router.put("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}/publicar")
+@router.put("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}/publicar", tags=["documentos"])
 def publish_document_version(
     company_id: int,
     area: str,
@@ -558,7 +636,7 @@ def publish_document_version(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.get("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}")
+@router.get("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}", tags=["documentos"])
 def list_document_versions(
     company_id: int,
     area: str,
@@ -598,7 +676,7 @@ def list_document_versions(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.get("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}/conteudo")
+@router.get("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}/conteudo", tags=["documentos"])
 def get_published_document_content(
     company_id: int,
     area: str,

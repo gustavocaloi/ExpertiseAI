@@ -1,9 +1,18 @@
 # Expertise.AI
 
+[![GitHub](https://img.shields.io/badge/GitHub-ExpertiseAI-181717?logo=github)](https://github.com/gustavocaloi/ExpertiseAI)
+[![License: MIT](https://img.shields.io/badge/License-MIT-4d2d5e.svg)](https://opensource.org/license/MIT)
+[![Docling](https://img.shields.io/badge/Docling-Read%20Docs-0d7b58?logo=readthedocs&logoColor=white)](https://docling-project.github.io/docling/)
+
 ## Plataforma de Base de Conhecimento
 
 `Expertise.AI` é um sistema para centralizar, organizar e consultar conhecimento corporativo de forma rápida e rastreável.  
 O objetivo é reduzir tempo de busca por informação, padronizar conteúdos e permitir reutilização de conhecimento em operações, suporte, onboarding e decisão.
+
+A plataforma também pode ser utilizada como base de conhecimento para consulta de agentes de IA, favorecendo automação e respostas contextualizadas.
+
+Repositório oficial no GitHub:
+- [github.com/gustavocaloi/ExpertiseAI](https://github.com/gustavocaloi/ExpertiseAI)
 
 ## Estratégia de armazenamento
 
@@ -335,6 +344,7 @@ Esses valores podem ser alterados por variáveis de ambiente:
 - `EXPAI_SUPER_ADMIN_PASSWORD`
 - `EXPAI_BOOTSTRAP_DEFAULT_ADMIN` (`true` ou `false`)
 - `EXPAI_ACCESS_CONTROL_ENABLED` (`true` ou `false`)
+- `EXPAI_API_BASE_URL` (ex.: `http://localhost:8000`, usada na documentação Swagger/OpenAPI)
 
 Recomenda-se alterar a senha padrão logo no primeiro acesso.
 

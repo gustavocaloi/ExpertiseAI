@@ -81,26 +81,118 @@ def init_db() -> None:
                 name TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
+                parent_area TEXT,
                 FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
                 UNIQUE(company_id, kind, name)
             )
             """
         )
+        tax_columns = {row["name"] for row in cur.execute("PRAGMA table_info(taxonomies)").fetchall()}
+        if "parent_area" not in tax_columns:
+            cur.execute("ALTER TABLE taxonomies ADD COLUMN parent_area TEXT")
+
+        _ensure_taxonomy_parent_area_default(conn)
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_tax_company_kind ON taxonomies (company_id, kind)
             """
         )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tax_company_kind_parent_area
+            ON taxonomies (company_id, kind, parent_area)
+            """
+        )
+        if _needs_taxonomy_migration(conn):
+            _migrate_taxonomies_schema(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_taxonomy_parent_area_default(conn: sqlite3.Connection) -> None:
+    columns = conn.execute("PRAGMA table_info(taxonomies)").fetchall()
+    has_parent_area = any(row[1] == "parent_area" for row in columns)
+    if not has_parent_area:
+        return
+    conn.execute("UPDATE taxonomies SET parent_area = '' WHERE parent_area IS NULL")
+
+
+def _needs_taxonomy_migration(conn: sqlite3.Connection) -> bool:
+    try:
+        indexes = conn.execute("PRAGMA index_list(taxonomies)").fetchall()
+    except sqlite3.DatabaseError:
+        return False
+
+    for index in indexes:
+        index_name = index[1]
+        is_unique = bool(index[2])
+        if not is_unique:
+            continue
+        index_columns = conn.execute(f"PRAGMA index_info({index_name})").fetchall()
+        col_names = [row[2] for row in index_columns]
+        if col_names == ["company_id", "kind", "name"]:
+            return True
+        if col_names == ["company_id", "kind", "name", "parent_area"]:
+            return False
+
+    return False
+
+
+def _migrate_taxonomies_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE taxonomies RENAME TO taxonomies_old")
+    conn.execute(
+        """
+        CREATE TABLE taxonomies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('area', 'categoria')),
+            name TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            parent_area TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+            UNIQUE(company_id, kind, name, parent_area)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO taxonomies (company_id, kind, name, is_active, created_at, parent_area)
+        SELECT
+            company_id,
+            kind,
+            name,
+            is_active,
+            created_at,
+            CASE
+              WHEN kind = 'categoria' THEN COALESCE(parent_area, '')
+              ELSE ''
+            END AS parent_area
+        FROM taxonomies_old
+        """
+    )
+    conn.execute("DROP TABLE taxonomies_old")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tax_company_kind ON taxonomies (company_id, kind)")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tax_company_kind_parent_area
+        ON taxonomies (company_id, kind, parent_area)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tax_company_kind_name_parent_area_uq
+        ON taxonomies (company_id, kind, name, parent_area)
+        """
+    )
 
 
 def _taxonomy_normalize_name(name: str) -> str:
     text = (name or '').strip().lower()
     text = re.sub(r"[^a-z0-9_.-]+", "-", text)
     text = re.sub(r"-+", "-", text).strip("-")
-    return text or "categoria"
+    return text
 
 
 def create_company(name: str, slug: str, description: str = "") -> int:
@@ -263,9 +355,20 @@ def list_users_in_company(company_id: int) -> list[dict]:
         conn.close()
 
 
-def list_taxonomies(company_id: int, kind: str) -> list[str]:
+def list_taxonomies(company_id: int, kind: str) -> list[str] | list[dict]:
     conn = get_connection()
     try:
+        if kind == "categoria":
+            rows = conn.execute(
+                """
+                SELECT name, parent_area
+                FROM taxonomies
+                WHERE company_id = ? AND kind = ? AND is_active = 1
+                ORDER BY COALESCE(parent_area, ''), name
+                """,
+                (company_id, kind),
+            ).fetchall()
+            return [{"name": row["name"], "area": row["parent_area"] or ""} for row in rows]
         rows = conn.execute(
             """
             SELECT name
@@ -280,19 +383,22 @@ def list_taxonomies(company_id: int, kind: str) -> list[str]:
         conn.close()
 
 
-def create_taxonomy(company_id: int, kind: str, name: str) -> str:
+def create_taxonomy(company_id: int, kind: str, name: str, parent_area: Optional[str] = None) -> str:
     cleaned = _taxonomy_normalize_name(name)
     if not cleaned:
         raise ValueError("Nome inválido")
+    cleaned_parent_area = _taxonomy_normalize_name(parent_area) if kind == "categoria" else ""
+    if kind == "categoria" and not cleaned_parent_area:
+        raise ValueError("A categoria precisa de uma área vinculada.")
     conn = get_connection()
     try:
         conn.execute(
             """
             INSERT OR REPLACE INTO taxonomies
-            (company_id, kind, name, is_active, created_at)
-            VALUES (?, ?, ?, 1, ?)
+            (company_id, kind, name, is_active, created_at, parent_area)
+            VALUES (?, ?, ?, 1, ?, ?)
             """,
-            (company_id, kind, cleaned, _now()),
+            (company_id, kind, cleaned, _now(), cleaned_parent_area),
         )
         conn.commit()
         return cleaned
@@ -300,26 +406,71 @@ def create_taxonomy(company_id: int, kind: str, name: str) -> str:
         conn.close()
 
 
-def delete_taxonomy(company_id: int, kind: str, name: str) -> None:
+def delete_taxonomy(company_id: int, kind: str, name: str, area: Optional[str] = None) -> None:
     cleaned = _taxonomy_normalize_name(name)
+    cleaned_parent_area = _taxonomy_normalize_name(area) if kind == "categoria" else ""
     conn = get_connection()
     try:
-        conn.execute(
-            """
-            DELETE FROM taxonomies
-            WHERE company_id = ? AND kind = ? AND name = ?
-            """,
-            (company_id, kind, cleaned),
-        )
+        affected_rows = 0
+        if kind == "categoria" and cleaned_parent_area:
+            cursor = conn.execute(
+                """
+                DELETE FROM taxonomies
+                WHERE company_id = ? AND kind = ? AND name = ? AND COALESCE(parent_area, '') = ?
+                """,
+                (company_id, kind, cleaned, cleaned_parent_area),
+            )
+            affected_rows = cursor.rowcount
+        else:
+            cursor = conn.execute(
+                """
+                DELETE FROM taxonomies
+                WHERE company_id = ? AND kind = ? AND name = ?
+                """,
+                (company_id, kind, cleaned),
+            )
+            affected_rows = cursor.rowcount
         conn.commit()
+        if not affected_rows:
+            if kind == "categoria" and cleaned_parent_area:
+                raise ValueError("Categoria não encontrada para a área informada.")
+            raise ValueError(f"{kind} não encontrada.")
+        if affected_rows > 1 and kind == "categoria" and cleaned_parent_area:
+            raise ValueError("Dados inconsistentes no cadastro de categorias.")
+        if affected_rows > 1 and kind == "categoria" and not cleaned_parent_area:
+            raise ValueError("A categoria informada está vinculada a mais de uma área. Informe a área.")
+        return
     finally:
         conn.close()
 
 
-def taxonomy_exists(company_id: int, kind: str, name: str) -> bool:
+def taxonomy_exists(company_id: int, kind: str, name: str, area: Optional[str] = None) -> bool:
     cleaned = _taxonomy_normalize_name(name)
     conn = get_connection()
     try:
+        if kind == "categoria" and area:
+            row = conn.execute(
+                """
+                SELECT 1 FROM taxonomies
+                WHERE company_id = ? AND kind = ? AND is_active = 1
+                  AND name = ? AND COALESCE(parent_area, '') = ?
+                LIMIT 1
+                """,
+                (company_id, kind, cleaned, _taxonomy_normalize_name(area)),
+            ).fetchone()
+            if row:
+                return True
+            row = conn.execute(
+                """
+                SELECT 1 FROM taxonomies
+                WHERE company_id = ? AND kind = ? AND is_active = 1 AND name = ? AND parent_area IS NULL
+                LIMIT 1
+                """,
+                (company_id, kind, cleaned),
+            ).fetchone()
+            if row:
+                return True
+
         row = conn.execute(
             """
             SELECT 1 FROM taxonomies

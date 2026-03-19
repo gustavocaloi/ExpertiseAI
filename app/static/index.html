@@ -124,11 +124,19 @@
               </label>
             </section>
 
-          <section class="actions-grid">
+            <section class="actions-grid">
               <article class="action-card">
                 <h3>Documentos</h3>
                 <ul id="docsList" class="items-list"></ul>
               </article>
+            </section>
+
+            <section class="pager-row">
+              <span id="docsPagerInfo" class="pager-info" aria-live="polite">Página 1 de 1 — 1 a 6 de 6 documento(s)</span>
+              <div class="pager-controls">
+                <button id="docsPrev" type="button">← Anterior</button>
+                <button id="docsNext" type="button">Próxima →</button>
+              </div>
             </section>
           </section>
 
@@ -144,31 +152,52 @@
             </article>
           </section>
 
-          <section class="session panel-card" id="taxonomySession">
+            <section class="session panel-card" id="taxonomySession">
             <article class="action-card taxonomy-admin">
               <h3>Administração de Áreas e Categorias</h3>
-              <div class="action-card-grid">
+              <form id="addAreaForm" class="taxonomy-post-form" aria-label="Adicionar área" autocomplete="off"></form>
+              <form id="addCategoriaForm" class="taxonomy-post-form" aria-label="Adicionar categoria" autocomplete="off"></form>
+              <div class="taxonomy-creation">
+                <div class="taxonomy-fields-row">
+                  <div class="taxonomy-group taxonomy-group--areas">
+                    <label class="taxonomy-field taxonomy-field--area">
+                      <span>Nova área</span>
+                      <input form="addAreaForm" required id="areaInput" placeholder="suporte" />
+                    </label>
+                  </div>
+                  <div class="taxonomy-group taxonomy-group--categorias">
+                    <label class="taxonomy-field taxonomy-field--categoria-area">
+                      <span>Área da categoria</span>
+                      <div class="sort-control__field">
+                        <select form="addCategoriaForm" id="categoriaAreaSelect" required>
+                          <option value="">Selecione uma área</option>
+                        </select>
+                        <span class="sort-control__icon" aria-hidden="true">▾</span>
+                      </div>
+                    </label>
+                    <label class="taxonomy-field taxonomy-field--categoria">
+                      <span>Nova categoria</span>
+                      <input form="addCategoriaForm" required id="categoriaInput" placeholder="processos" />
+                    </label>
+                  </div>
+                </div>
+                <div class="taxonomy-actions-row">
+                  <div class="taxonomy-group">
+                    <button type="submit" form="addAreaForm">Adicionar área</button>
+                  </div>
+                  <div class="taxonomy-group">
+                    <button type="submit" form="addCategoriaForm">Adicionar categoria</button>
+                  </div>
+                </div>
+              </div>
+              <div class="action-card-grid taxonomy-grid">
                 <section class="taxonomy-block">
                   <h4>Áreas</h4>
-                  <form id="addAreaForm" class="vertical-form">
-                    <label>
-                      <span>Nova área</span>
-                      <input required id="areaInput" placeholder="suporte" />
-                    </label>
-                    <button type="submit">Adicionar área</button>
-                  </form>
                   <ul id="areasList" class="taxonomy-list">Carregando...</ul>
                 </section>
 
                 <section class="taxonomy-block">
                   <h4>Categorias</h4>
-                  <form id="addCategoriaForm" class="vertical-form">
-                    <label>
-                      <span>Nova categoria</span>
-                      <input required id="categoriaInput" placeholder="processos" />
-                    </label>
-                    <button type="submit">Adicionar categoria</button>
-                  </form>
                   <ul id="categoriasList" class="taxonomy-list">Carregando...</ul>
                 </section>
               </div>
@@ -234,7 +263,7 @@
                 </label>
                 <label>
                   <span>Título</span>
-                  <input required id="docTitle" placeholder="Guia de Onboarding" />
+                  <input required id="docTitle" maxlength="256" placeholder="Guia de Onboarding" />
                 </label>
                 <label>
                   <span>Slug</span>
@@ -242,7 +271,16 @@
                 </label>
                 <label>
                   <span>Tags (separadas por vírgula)</span>
-                  <input id="docTags" placeholder="onboarding, suporte" />
+                  <div class="tag-editor">
+                    <div id="docTagBadges" class="tag-badge-row" aria-live="polite" aria-label="Tags adicionadas"></div>
+                    <input id="docTags" placeholder="Digite uma tag e pressione vírgula para adicionar" autocomplete="off" />
+                  </div>
+                  <small class="helper">Digite o texto da tag e use vírgula (,) para criar um badge.</small>
+                </label>
+                <label>
+                  <span>Prompt AI</span>
+                  <textarea id="docAiPrompt" rows="3" placeholder="Sugestão de apoio ao prompt de IA, para auxilio nos Agents AI."></textarea>
+                  <small class="helper">Sugestão de apoio ao prompt de IA, para auxilio nos Agents AI.</small>
                 </label>
                 <label>
                   <span>Arquivo (PDF/DOCX)</span>
@@ -347,7 +385,7 @@
         <div class="doc-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="docModalTitle">
           <header class="doc-modal__header">
             <div>
-              <h3 id="docModalTitle">Visualizar documento</h3>
+              <h3 id="docModalTitle" class="doc-title">Visualizar documento</h3>
               <p class="doc-modal__meta" id="docModalMeta"></p>
             </div>
             <button type="button" id="docModalCloseBtn" class="ghost doc-modal__close" aria-label="Fechar popup">✕</button>

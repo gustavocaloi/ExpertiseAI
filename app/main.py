@@ -19,6 +19,7 @@ from .config import (
     DEFAULT_COMPANY_DESCRIPTION,
     DEFAULT_COMPANY_NAME,
     DEFAULT_COMPANY_SLUG,
+    API_BASE_URL,
     LOG_LEVEL,
     REBUILD_KB_ON_START,
 )
@@ -50,7 +51,12 @@ async def _upload_jobs_cleanup_loop() -> None:
 
 def create_app() -> FastAPI:
     _configure_logging()
-    app = FastAPI(title="Expertise.AI", version="0.1.0")
+    openapi_servers = [{"url": API_BASE_URL, "description": "Servidor configurado"}] if API_BASE_URL else None
+    app = FastAPI(
+        title="Expertise.AI",
+        version="0.1.0",
+        servers=openapi_servers,
+    )
     static_dir = Path(__file__).resolve().parent / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
 

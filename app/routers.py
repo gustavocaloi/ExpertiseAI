@@ -6,7 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from . import db, services
-from .config import ACCESS_CONTROL_ENABLED, DEFAULT_COMPANY_DESCRIPTION, DEFAULT_COMPANY_NAME, SUPER_ADMIN_USER
+from .config import (
+    ACCESS_CONTROL_ENABLED,
+    API_BASE_URL,
+    DEFAULT_COMPANY_DESCRIPTION,
+    DEFAULT_COMPANY_NAME,
+    SUPER_ADMIN_USER,
+)
 from .security import TokenData, create_access_token, current_user, hash_password, require_company_access, require_role, verify_password
 
 
@@ -62,7 +68,7 @@ def _is_scoped_access_allowed(company_id: int, user: TokenData) -> None:
         raise HTTPException(status_code=403, detail="Token fora do contexto da empresa")
 
 
-@router.post("/empresas", status_code=201)
+@router.post("/empresas", status_code=201, tags=["empresas"])
 def create_company(payload: CompanyCreatePayload):
     company_slug = _slugify(payload.company_name)
     company_id = db.create_company(payload.company_name, company_slug, payload.company_description)
@@ -72,7 +78,7 @@ def create_company(payload: CompanyCreatePayload):
     return {"empresa_id": company_id, "slug": company_slug, "admin_id": user_id}
 
 
-@router.get("/auth/me", response_model=UserSessionResponse)
+@router.get("/auth/me", response_model=UserSessionResponse, tags=["auth"])
 def get_current_user(user: TokenData = Depends(current_user)):
     if not ACCESS_CONTROL_ENABLED:
         return {
@@ -106,7 +112,7 @@ def get_current_user(user: TokenData = Depends(current_user)):
     }
 
 
-@router.post("/auth/login", response_model=LoginResponse)
+@router.post("/auth/login", response_model=LoginResponse, tags=["auth"])
 def login(payload: LoginPayload):
     user = db.get_user_by_email(payload.email)
     if not user or not verify_password(payload.password, user["password_hash"]):
@@ -125,13 +131,13 @@ def login(payload: LoginPayload):
     return {"access_token": token, "token_type": "bearer"}
 
 
-@router.get("/empresas/{company_id}/usuarios")
+@router.get("/empresas/{company_id}/usuarios", tags=["usuarios"])
 def list_users(company_id: int, user: TokenData = Depends(require_role("admin"))):
     _is_scoped_access_allowed(company_id, user)
     return db.list_users_in_company(company_id)
 
 
-@router.post("/empresas/{company_id}/usuarios")
+@router.post("/empresas/{company_id}/usuarios", tags=["usuarios"])
 def create_user(
     company_id: int,
     payload: CreateUserPayload,
@@ -151,10 +157,11 @@ def create_user(
     return {"message": "usuário criado/vinculado com sucesso", "usuario_id": user_id, "empresa_id": company_id, "role": payload.role}
 
 
-@router.get("/config")
+@router.get("/config", tags=["config"])
 def get_system_config():
     return {
         "access_control_enabled": ACCESS_CONTROL_ENABLED,
+        "base_url": API_BASE_URL,
         "default_company_id": db.get_first_company_id(),
         "default_company_name": DEFAULT_COMPANY_NAME,
         "default_company_description": DEFAULT_COMPANY_DESCRIPTION,
@@ -162,7 +169,7 @@ def get_system_config():
     }
 
 
-@router.post("/admin/rebuild-documents")
+@router.post("/admin/rebuild-documents", tags=["admin"])
 def rebuild_documents_metadata(force: bool = False, user: TokenData = Depends(require_role("admin"))):
     _ = user
     return {

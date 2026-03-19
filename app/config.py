@@ -14,6 +14,8 @@ SECRET_KEY = os.getenv("EXPAI_SECRET_KEY", "change-me")
 ALGORITHM = os.getenv("EXPAI_JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("EXPAI_ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 ACCESS_CONTROL_ENABLED = os.getenv("EXPAI_ACCESS_CONTROL_ENABLED", "true").lower() in {"1", "true", "yes"}
+_api_base_url = os.getenv("EXPAI_API_BASE_URL", "").strip()
+API_BASE_URL = _api_base_url or "http://localhost:8000"
 
 DOCLING_ENABLED = os.getenv("EXPAI_DOCLING_ENABLED", "true").lower() in {"1", "true", "yes"}
 DOCLING_CACHE_DIR = Path(os.getenv("DOCLING_CACHE_DIR", DATA_DIR / "docling_cache"))

@@ -42,6 +42,7 @@ _DOCLING_MAX_FILE_SIZE_BYTES = max(1, DOCLING_MAX_FILE_SIZE_MB) * 1024 * 1024
 _DOCLING_PDF_PAGE_BATCH_SIZE = max(1, DOCLING_PDF_PAGE_BATCH_SIZE)
 _DOCLING_THREADS = max(1, DOCLING_THREADS)
 _DOCLING_WORKER_PATH = Path(__file__).resolve().parent / "docling_worker.py"
+_DOCUMENT_TITLE_MAX_CHARS = 256
 logger = logging.getLogger(__name__)
 _HF_CACHE_DIR = DOCLING_CACHE_DIR / "huggingface"
 _BUNDLED_HF_CACHE_DIR = DOCLING_BUNDLED_CACHE_DIR / "huggingface"
@@ -280,7 +281,11 @@ def _safe_parse_frontmatter(markdown: str) -> Dict[str, str]:
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
-        output[key.strip()] = value.strip()
+        value_raw = value.strip()
+        if ((value_raw.startswith("\"") and value_raw.endswith("\"")) or
+                (value_raw.startswith("'") and value_raw.endswith("'"))):
+            value_raw = value_raw[1:-1]
+        output[key.strip()] = value_raw
     return output
 
 
@@ -306,6 +311,11 @@ def _safe_tags(value: Any) -> list[str]:
         if clean and clean not in tags:
             tags.append(clean)
     return tags
+
+
+def _validate_document_title(title: str) -> None:
+    if len((title or "").strip()) > _DOCUMENT_TITLE_MAX_CHARS:
+        raise ValueError(f"O título deve ter no máximo {_DOCUMENT_TITLE_MAX_CHARS} caracteres.")
 
 
 def _safe_str(value: Any) -> str:
@@ -409,6 +419,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
                         "published": published,
                         "published_at": published_at,
                         "tags": metadata.get("tags", ""),
+                        "ai_prompt": metadata.get("ai_prompt", ""),
                     }
                 )
 
@@ -460,6 +471,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
                 "area": area,
                 "categoria": categoria,
                 "tags": merged_tags,
+                "ai_prompt": first_metadata.get("ai_prompt", ""),
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "published_version": published_version,
@@ -472,6 +484,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
                         "created_at": item["created_at"],
                         "published": item["published"],
                         "published_at": item.get("published_at"),
+                        "ai_prompt": item.get("ai_prompt", ""),
                     }
                     for item in versions
                 ],
@@ -494,7 +507,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
 
             db.create_taxonomy(company_id, "area", area)
             summary["taxonomies_created"] += 1
-            db.create_taxonomy(company_id, "categoria", categoria)
+            db.create_taxonomy(company_id, "categoria", categoria, parent_area=area)
             summary["taxonomies_created"] += 1
         except Exception:
             summary["errors"] += 1
@@ -524,6 +537,7 @@ def _frontmatter(markdown: str, metadata: Dict[str, Any]) -> str:
         f"created_at: {metadata['created_at']}",
         f"updated_at: {metadata['updated_at']}",
         f"tags: [{', '.join(metadata.get('tags', []))}]",
+        f"ai_prompt: {json.dumps(metadata.get('ai_prompt') or '')}",
         "---",
         "",
     ]
@@ -539,9 +553,11 @@ def create_or_update_text_document(
     content: str,
     author_email: str,
     tags: Iterable[str] = (),
+    ai_prompt: Optional[str] = None,
     is_published: bool = False,
     base_version: Optional[str] = None,
 ) -> Dict[str, Any]:
+    _validate_document_title(title)
     area_n = _normalize_taxonomy(area, DEFAULT_AREA)
     categoria_n = _normalize_taxonomy(categoria, DEFAULT_CATEGORIA)
     if (slug is None or not str(slug).strip()) and title:
@@ -561,6 +577,7 @@ def create_or_update_text_document(
             "area": area_n,
             "categoria": categoria_n,
             "tags": list(tags),
+            "ai_prompt": ai_prompt or "",
             "created_at": _now(),
             "updated_at": _now(),
             "published_version": "",
@@ -570,6 +587,8 @@ def create_or_update_text_document(
         meta = _read_meta(company_id, area_n, categoria_n, slug_n)
         if title:
             meta["title"] = title
+        if ai_prompt is not None:
+            meta["ai_prompt"] = ai_prompt
         meta["updated_at"] = _now()
         meta["tags"] = list(tags) if tags else meta.get("tags", [])
 
@@ -589,6 +608,7 @@ def create_or_update_text_document(
         "created_at": _now(),
         "published": bool(is_published),
         "published_at": _now() if is_published else None,
+        "ai_prompt": ai_prompt or "",
     }
 
     # se for publicada, publica imediatamente e despublica as outras
@@ -614,6 +634,7 @@ def create_or_update_text_document(
             "created_at": _now(),
             "updated_at": _now(),
             "tags": list(tags),
+            "ai_prompt": ai_prompt or "",
         },
     )
 
@@ -633,6 +654,7 @@ def create_or_update_text_document(
         "area": area_n,
         "categoria": categoria_n,
         "slug": slug_n,
+        "ai_prompt": meta.get("ai_prompt", ""),
         "version_uuid": version_meta.get("version_uuid"),
         "version": _version_display(version),
         "published_version": meta.get("published_version", ""),
@@ -678,6 +700,7 @@ async def import_file_to_markdown(
     author_email: str,
     tags: Iterable[str] = (),
     title: Optional[str] = None,
+    ai_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     raw = await file.read()
     return await import_file_to_markdown_bytes(
@@ -691,6 +714,7 @@ async def import_file_to_markdown(
         author_email=author_email,
         tags=tags,
         title=title,
+        ai_prompt=ai_prompt,
     )
 
 
@@ -705,6 +729,7 @@ async def import_file_to_markdown_path(
     author_email: str,
     tags: Iterable[str] = (),
     title: Optional[str] = None,
+    ai_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     normalized_path = Path(file_path)
     if not normalized_path.exists():
@@ -728,6 +753,7 @@ async def import_file_to_markdown_path(
         content=converted,
         author_email=author_email,
         tags=tags,
+        ai_prompt=ai_prompt,
         base_version=base_version,
         is_published=False,
     )
@@ -744,6 +770,7 @@ async def import_file_to_markdown_bytes(
     author_email: str,
     tags: Iterable[str] = (),
     title: Optional[str] = None,
+    ai_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     ext = Path(filename or "").suffix.lower()
     if not raw:
@@ -767,6 +794,7 @@ async def import_file_to_markdown_bytes(
         content=converted,
         author_email=author_email,
         tags=tags,
+        ai_prompt=ai_prompt,
         base_version=base_version,
         is_published=False,
     )
@@ -916,10 +944,16 @@ def read_published_documents(
     limit: int = 50,
     offset: int = 0,
     include_content: bool = True,
-) -> list[Dict[str, Any]]:
+    sort_by: str = "created_desc",
+    return_total: bool = False,
+) -> Dict[str, Any] | list[Dict[str, Any]]:
     root = Path(KB_ROOT) / str(company_id)
     if not root.exists():
+        if return_total:
+            return {"total": 0, "items": []}
         return []
+    term = (busca or "").strip().lower() if busca else ""
+    should_load_content = include_content or bool(term)
 
     out: list[Dict[str, Any]] = []
     for meta_file in root.rglob("document.meta.json"):
@@ -945,17 +979,35 @@ def read_published_documents(
             continue
         if tag and tag not in meta.get("tags", []):
             continue
-        if busca:
-            term = busca.lower()
-            if term not in str(meta.get("title", "")).lower() and term not in str(meta.get("slug", "")).lower():
-                continue
 
         published_version = str(meta.get("published_version", "") or "")
         if not published_version:
             continue
 
+        if term:
+            if (
+                term not in str(meta.get("title", "")).lower()
+                and term not in str(meta.get("slug", "")).lower()
+                and term not in " ".join(meta.get("tags", [])).lower()
+            ):
+                if should_load_content:
+                    try:
+                        content_payload = read_published_document_content(
+                            company_id=company_id,
+                            area=meta.get("area", ""),
+                            categoria=meta.get("categoria", ""),
+                            slug=meta.get("slug", ""),
+                            version=published_version,
+                        )
+                        if term not in str(content_payload.get("content", "")).lower():
+                            continue
+                    except (FileNotFoundError, ValueError, OSError):
+                        continue
+                else:
+                    continue
+
         published_content = ""
-        if include_content:
+        if should_load_content:
             try:
                 published_content = read_published_document_content(
                     company_id=company_id,
@@ -969,12 +1021,14 @@ def read_published_documents(
 
         item = {
             "document_uuid": meta.get("document_uuid"),
+            "satellite_document_id": meta.get("document_uuid"),
             "empresa_id": company_id,
             "slug": meta.get("slug"),
             "titulo": meta.get("title"),
             "area": meta.get("area"),
             "categoria": meta.get("categoria"),
             "tags": meta.get("tags", []),
+            "ai_prompt": meta.get("ai_prompt", ""),
             "published_version_uuid": next(
                 (
                     entry.get("version_uuid")
@@ -984,6 +1038,14 @@ def read_published_documents(
                 None,
             ),
             "published_version": published_version,
+            "satellite_version_id": next(
+                (
+                    entry.get("version_uuid")
+                    for entry in meta.get("versions", [])
+                    if _version_matches(entry.get("version"), published_version)
+                ),
+                None,
+            ),
             "created_at": meta.get("created_at"),
             "updated_at": meta.get("updated_at"),
         }
@@ -992,8 +1054,21 @@ def read_published_documents(
 
         out.append(item)
 
-    out = sorted(out, key=lambda item: item["updated_at"] or "", reverse=True)
-    return out[offset : offset + limit]
+    sort_option = (sort_by or "").strip()
+    if sort_option == "created_asc":
+        out = sorted(out, key=lambda item: item["updated_at"] or "")
+    elif sort_option == "area_asc":
+        out = sorted(out, key=lambda item: (item["area"] or "", item["categoria"] or "", item["updated_at"] or ""), reverse=False)
+    elif sort_option == "categoria_asc":
+        out = sorted(out, key=lambda item: (item["categoria"] or "", item["area"] or "", item["updated_at"] or ""), reverse=False)
+    else:
+        out = sorted(out, key=lambda item: item["updated_at"] or "", reverse=True)
+
+    total = len(out)
+    documents = out[offset : offset + limit]
+    if return_total:
+        return {"total": total, "items": documents}
+    return documents
 
 
 def read_published_document_content(
@@ -1053,6 +1128,7 @@ def read_published_document_content(
         "version_uuid": selected_entry.get("version_uuid"),
         "titulo": meta.get("title", slug_n),
         "tags": meta.get("tags", []),
+        "ai_prompt": selected_entry.get("ai_prompt") or meta.get("ai_prompt", ""),
         "versao": selected_version,
         "publicado": bool(selected_entry.get("published")),
         "updated_at": meta.get("updated_at"),

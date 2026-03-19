@@ -11,6 +11,8 @@ const state = {
   },
 };
 
+let selectedTaxonomyArea = '';
+
 const queryParams = new URLSearchParams(window.location.search);
 const DEBUG_MENU = queryParams.has('debug') || queryParams.has('trace') || localStorage.getItem('expai_debug') === '1';
 
@@ -95,9 +97,16 @@ const publishToggleInfo = document.getElementById('publishToggleInfo');
 const logoutBtn = document.getElementById('userLogoutMenuItem');
 const docAreaSelect = docArea;
 const docCategoriaSelect = docCategoria;
+const categoriaAreaSelect = document.getElementById('categoriaAreaSelect');
 const docSlugInput = document.getElementById('docSlug');
 const docTitleInput = document.getElementById('docTitle');
 const docContentInput = document.getElementById('docContent');
+const docAiPromptInput = document.getElementById('docAiPrompt');
+const docTagsInput = document.getElementById('docTags');
+const docTagBadges = document.getElementById('docTagBadges');
+const docsPrevButton = document.getElementById('docsPrev');
+const docsNextButton = document.getElementById('docsNext');
+const docsPagerInfo = document.getElementById('docsPagerInfo');
 
 let selectedDocument = null;
 let editingDocumentKey = null;
@@ -107,11 +116,54 @@ let selectedHistoryVersion = null;
 let importProgressTimer = null;
 let taxonomyLoading = false;
 let isSlugAutoSuggestionEnabled = true;
+let createSessionTags = [];
+const titleMaxChars = 256;
 const FALLBACK_AREA = 'sem-area';
 const FALLBACK_CATEGORIA = 'sem-categoria';
+const pagination = {
+  page: 1,
+  limit: 10,
+  total: 0,
+};
 
 function docTitleOf(doc) {
   return doc?.titulo || doc?.title || '';
+}
+
+function normalizeTextTitle(value) {
+  return String(value || '').trim();
+}
+
+function truncateForCard(value, maxChars = titleMaxChars) {
+  const normalized = normalizeTextTitle(value);
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}...`;
+}
+
+function normalizeTagValue(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeTagValues(values) {
+  if (!values) {
+    return [];
+  }
+  if (Array.isArray(values)) {
+    return values
+      .map((item) => normalizeTagValue(item))
+      .filter((item, index, list) => item && list.indexOf(item) === index);
+  }
+  if (typeof values === 'string') {
+    return values
+      .split(',')
+      .map((item) => normalizeTagValue(item))
+      .filter((item, index, list) => item && list.indexOf(item) === index);
+  }
+  return [];
 }
 
 function docPublishedVersionOf(doc) {
@@ -218,8 +270,21 @@ function setTaxonomySelectOptions() {
   if (!docArea || !docCategoria) {
     return;
   }
-  const areaList = state.taxonomies.areas;
-  const categoriaList = state.taxonomies.categorias;
+  const previousArea = (docArea.value || '').trim();
+  const previousCategoria = (docCategoria.value || '').trim();
+  const availableAreas = state.taxonomies.areas.map((name) => String(name || '').trim()).filter(Boolean);
+  const areaList = [...new Set(
+    [
+      ...availableAreas,
+      ...previousArea ? [previousArea] : [],
+    ].filter(Boolean),
+  )];
+  const categoriaList = state.taxonomies.categorias.map((item) => (
+    typeof item === 'string' ? { name: item, area: '' } : {
+      name: item?.name || item?.categoria || '',
+      area: item?.area || item?.parent_area || '',
+    }
+  )).filter((item) => item.name);
 
   docArea.innerHTML = '<option value="" selected>Sem área (opcional)</option>';
   areaList.forEach((name) => {
@@ -228,14 +293,45 @@ function setTaxonomySelectOptions() {
     option.textContent = name;
     docArea.appendChild(option);
   });
+  if ([...docArea.options].some((option) => option.value === previousArea)) {
+    docArea.value = previousArea;
+  }
 
   docCategoria.innerHTML = '<option value="" selected>Sem categoria (opcional)</option>';
-  categoriaList.forEach((name) => {
+  const currentArea = docArea.value || '';
+  const normalizedCurrentArea = (currentArea || '').trim();
+  const categoriesToRender = normalizedCurrentArea
+    ? categoriaList.filter((item) => item.area === normalizedCurrentArea)
+    : categoriaList;
+  const finalCategoriasToRender = categoriesToRender;
+
+  const allowedCategorias = new Set(['', ...finalCategoriasToRender.map((item) => item.name)]);
+  finalCategoriasToRender.forEach((item) => {
     const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name;
+    option.value = item.name;
+    option.textContent = item.area ? `${item.name} (${item.area})` : item.name;
+    option.dataset.area = item.area || '';
     docCategoria.appendChild(option);
   });
+  if (allowedCategorias.has(previousCategoria)) {
+    docCategoria.value = previousCategoria;
+  } else {
+    docCategoria.value = '';
+  }
+
+  if (categoriaAreaSelect) {
+    const currentCategoriaArea = categoriaAreaSelect.value || '';
+    categoriaAreaSelect.innerHTML = '<option value="">Selecione uma área</option>';
+    areaList.forEach((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      categoriaAreaSelect.appendChild(option);
+    });
+    if ([...categoriaAreaSelect.options].some((option) => option.value === currentCategoriaArea)) {
+      categoriaAreaSelect.value = currentCategoriaArea;
+    }
+  }
 }
 
 function setFormSelectValue(select, value) {
@@ -262,20 +358,41 @@ function renderTaxonomyList(listElement, items = [], kind) {
     return;
   }
   listElement.innerHTML = '';
-  items.forEach((name) => {
+  items.forEach((item) => {
+    const name = typeof item === 'string' ? item : item?.name || '';
+    if (!name) {
+      return;
+    }
+    const area = typeof item === 'string' ? '' : item?.area || item?.parent_area || '';
     const li = document.createElement('li');
     li.className = 'taxonomy-item';
+    li.dataset.kind = kind;
+    li.dataset.name = name;
+    if (kind === 'areas' && name === selectedTaxonomyArea) {
+      li.classList.add('taxonomy-item--active');
+    }
     li.innerHTML = `
-      <span class="taxonomy-name">${name}</span>
-      <button type="button" class="taxonomy-remove" data-kind="${kind}" data-name="${name}">Remover</button>
+      <span class="taxonomy-name">${name}${area ? ` <span class="taxonomy-area-pill">${area}</span>` : ''}</span>
+      <button type="button" class="taxonomy-remove" data-kind="${kind}" data-name="${name}" ${area ? `data-area="${area}"` : ''}>Remover</button>
     `;
     listElement.appendChild(li);
   });
 }
 
 function renderTaxonomies() {
-  renderTaxonomyList(areasList, state.taxonomies.areas, 'areas');
-  renderTaxonomyList(categoriasList, state.taxonomies.categorias, 'categorias');
+  const availableAreas = (state.taxonomies.areas || []).map((item) => String(item || '').trim()).filter(Boolean);
+  if (selectedTaxonomyArea && !availableAreas.includes(selectedTaxonomyArea)) {
+    selectedTaxonomyArea = '';
+    if (categoriaAreaSelect) {
+      categoriaAreaSelect.value = '';
+    }
+  }
+
+  renderTaxonomyList(areasList, availableAreas, 'areas');
+  const categoryItems = state.taxonomies.categorias.filter((item) => (
+    !selectedTaxonomyArea || (item?.area || item?.parent_area || '') === selectedTaxonomyArea
+  ));
+  renderTaxonomyList(categoriasList, categoryItems, 'categorias');
   setTaxonomySelectOptions();
   if (filterArea) {
     const currentArea = filterArea.value;
@@ -292,8 +409,13 @@ function renderTaxonomies() {
   }
   if (filterCategoria) {
     const currentCategoria = filterCategoria.value;
+    const categoriaNames = state.taxonomies.categorias
+      .map((item) => (typeof item === 'string' ? item?.trim() : `${item?.name || ''}`))
+      .filter(Boolean)
+      .filter((value, index, list) => list.indexOf(value) === index)
+      .sort();
     filterCategoria.innerHTML = '<option value="">Todas as categorias</option>';
-    state.taxonomies.categorias.forEach((name) => {
+    categoriaNames.forEach((name) => {
       const option = document.createElement('option');
       option.value = name;
       option.textContent = name;
@@ -437,7 +559,14 @@ async function loadTaxonomies() {
       apiFetch(`/api/v1/empresas/${state.companyId}/categorias`),
     ]);
     state.taxonomies.areas = areasData?.items || [];
-    state.taxonomies.categorias = categoriasData?.items || [];
+    state.taxonomies.categorias = (categoriasData?.items || []).map((item) => (
+      typeof item === 'string'
+        ? { name: item, area: '' }
+        : {
+          name: item?.name || '',
+          area: item?.area || item?.parent_area || '',
+        }
+    )).filter((item) => item.name);
     renderTaxonomies();
     renderTaxonomyError('');
   } catch (error) {
@@ -1113,7 +1242,7 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
   if (docModalEditBtn) {
     docModalEditBtn.classList.remove('hidden-view');
   }
-  docModalTitle.textContent = docTitleOf(doc) || doc.slug;
+  docModalTitle.textContent = truncateForCard(docTitleOf(doc) || doc.slug);
   docModalMeta.textContent = `${doc.area} / ${doc.categoria} · ${versionLabel} · ${doc.updated_at || ''}`;
   docModalContent.textContent = 'Carregando conteúdo...';
   docModal.setAttribute('aria-hidden', 'false');
@@ -1155,9 +1284,13 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
       const payloadTitle = docTitleOf(payload);
       if (payloadTitle) {
         selectedDocument = { ...selectedDocument, title: payloadTitle };
+        docModalTitle.textContent = truncateForCard(payloadTitle);
       }
       if (payload?.tags) {
         selectedDocument = { ...selectedDocument, tags: payload.tags };
+      }
+      if (payload?.ai_prompt) {
+        selectedDocument = { ...selectedDocument, ai_prompt: payload.ai_prompt };
       }
     })
     .catch((error) => {
@@ -1252,12 +1385,17 @@ function openCreateForSelectedDocument() {
   }
 
   const contentTarget = document.getElementById('docContent');
+  const promptTarget = document.getElementById('docAiPrompt');
   contentTarget.value = '';
   setFormSelectValue(docArea, selectedDocument.area || '');
   setFormSelectValue(docCategoria, selectedDocument.categoria || '');
+  setTaxonomySelectOptions();
   document.getElementById('docSlug').value = selectedDocument.slug || '';
   document.getElementById('docTitle').value = docTitleOf(selectedDocument) || selectedDocument.slug || '';
-  document.getElementById('docTags').value = (selectedDocument.tags || []).join(', ');
+  setCreateSessionTags(selectedDocument.tags || []);
+  if (promptTarget) {
+    promptTarget.value = selectedDocument.ai_prompt || '';
+  }
   const fileInput = document.getElementById('docFile');
   if (fileInput) {
     fileInput.value = '';
@@ -1271,7 +1409,7 @@ function openCreateForSelectedDocument() {
         document.getElementById('docTitle').value = payloadTitle;
       }
       if (payload?.tags) {
-        document.getElementById('docTags').value = payload.tags.join(', ');
+        setCreateSessionTags(payload.tags || []);
       }
       const selectedVersion = contentVersionOf(payload);
       if (selectedVersion) {
@@ -1316,6 +1454,66 @@ function parseTags(value) {
     .split(',')
     .map((t) => t.trim())
     .filter(Boolean);
+}
+
+function setCreateSessionTags(nextTags = [], pendingInput = '') {
+  const normalized = normalizeTagValues(nextTags);
+  createSessionTags = normalized;
+  if (docTagBadges) {
+    docTagBadges.innerHTML = '';
+    normalized.forEach((tag) => {
+      const badge = document.createElement('span');
+      badge.className = 'tag-badge';
+      badge.dataset.tag = tag;
+      badge.textContent = tag;
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'tag-badge__remove';
+      remove.setAttribute('aria-label', `Remover tag ${tag}`);
+      remove.innerHTML = '×';
+      badge.appendChild(remove);
+      docTagBadges.appendChild(badge);
+    });
+  }
+  if (docTagsInput) {
+    docTagsInput.value = pendingInput || '';
+  }
+}
+
+function addCreateTagFromInput(rawValue) {
+  const normalized = normalizeTagValues(parseTags(rawValue || ''));
+  if (!normalized.length) {
+    return;
+  }
+  const unique = new Set(createSessionTags);
+  normalized.forEach((tag) => unique.add(tag));
+  setCreateSessionTags([...unique]);
+  if (docTagsInput) {
+    docTagsInput.value = '';
+  }
+}
+
+function removeCreateTag(tag) {
+  const target = normalizeTagValue(tag);
+  if (!target) {
+    return;
+  }
+  const remaining = createSessionTags.filter((item) => item !== target);
+  setCreateSessionTags(remaining);
+}
+
+function commitCreateTagInput(value = '') {
+  const text = value || docTagsInput?.value || '';
+  addCreateTagFromInput(text);
+  if (docTagsInput) {
+    docTagsInput.value = '';
+  }
+}
+
+function collectCreateTags() {
+  const pending = parseTags(docTagsInput?.value || '');
+  return normalizeTagValues([...createSessionTags, ...pending]);
 }
 
 function collectTaxonomyFields() {
@@ -1363,6 +1561,50 @@ docTitleInput?.addEventListener('input', () => {
   maybeFillSlugFromTitle();
 });
 docSlugInput?.addEventListener('input', handleSlugManualEdit);
+docTagsInput?.addEventListener('keydown', (event) => {
+  if (event.key === ',') {
+    event.preventDefault();
+    commitCreateTagInput();
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    commitCreateTagInput();
+    return;
+  }
+  if (event.key === 'Backspace' && !docTagsInput.value && createSessionTags.length > 0) {
+    event.preventDefault();
+    setCreateSessionTags(createSessionTags.slice(0, -1));
+  }
+});
+docTagsInput?.addEventListener('input', () => {
+  const value = docTagsInput.value || '';
+  if (!value.includes(',')) {
+    return;
+  }
+  const parts = value.split(',');
+  const trailing = parts.pop() || '';
+  const toAdd = parts.join(', ');
+  addCreateTagFromInput(toAdd);
+  docTagsInput.value = trailing;
+});
+docTagsInput?.addEventListener('blur', () => {
+  if (!docTagsInput.value) {
+    return;
+  }
+  commitCreateTagInput();
+});
+docTagBadges?.addEventListener('click', (event) => {
+  const removeBtn = event.target.closest('.tag-badge__remove');
+  if (!removeBtn) {
+    return;
+  }
+  const tag = removeBtn.parentNode?.dataset?.tag;
+  removeCreateTag(tag);
+});
+docArea?.addEventListener('change', () => {
+  setTaxonomySelectOptions();
+});
 
 async function apiFetch(path, options = {}) {
   const headers = options.headers || {};
@@ -1588,13 +1830,20 @@ async function loadPublishedDocs() {
   const tag = document.getElementById('filterTag').value;
   const busca = document.getElementById('filterBusca').value;
   const sortBy = document.getElementById('sortDocs')?.value || 'created_desc';
+  pagination.limit = 10;
+  const clampedLimit = Math.max(1, Math.min(100, pagination.limit));
+  const offset = (Math.max(1, pagination.page || 1) - 1) * clampedLimit;
+  pagination.page = Math.max(1, pagination.page || 1);
 
   const query = new URLSearchParams();
   if (area) query.set('area', area);
   if (categoria) query.set('categoria', categoria);
   if (tag) query.set('tag', tag);
   if (busca) query.set('busca', busca);
-  query.set('include_content', 'true');
+  query.set('include_content', busca ? 'true' : 'false');
+  query.set('limit', String(clampedLimit));
+  query.set('offset', String(offset));
+  query.set('sort', sortBy);
   const matchesDashboardFilters = (doc) => {
     const docArea = String(doc?.area || '').toLowerCase();
     const docCategoria = String(doc?.categoria || '').toLowerCase();
@@ -1605,7 +1854,8 @@ async function loadPublishedDocs() {
     const areaOk = !area || docArea === area.toLowerCase();
     const categoriaOk = !categoria || docCategoria === categoria.toLowerCase();
     const tagOk = !tag || docTags.some((item) => item.includes(tag.toLowerCase()));
-    const buscaOk = !busca || docTitle.includes(busca.toLowerCase()) || docError.includes(busca.toLowerCase());
+    const docContent = String(doc?.content || '').toLowerCase();
+    const buscaOk = !busca || docTitle.includes(busca.toLowerCase()) || docError.includes(busca.toLowerCase()) || docContent.includes(busca.toLowerCase());
     return areaOk && categoriaOk && tagOk && buscaOk;
   };
 
@@ -1618,61 +1868,64 @@ async function loadPublishedDocs() {
     docsList.innerHTML = '';
     const processingDocs = (Array.isArray(processingData?.documentos) ? processingData.documentos : []).filter(matchesDashboardFilters);
     const failedDocs = (Array.isArray(failedData?.documentos) ? failedData.documentos : []).filter(matchesDashboardFilters);
-    const publishedDocs = Array.isArray(data.documentos) ? data.documentos : [];
-    const compareText = (left, right) => String(left || '').localeCompare(String(right || ''), 'pt-BR');
-    const resolveSortDate = (doc) => {
-      const candidates = [
-        doc?.created_at,
-        doc?.updated_at,
-        doc?.published_at,
-        doc?.finished_at,
-        doc?.started_at,
-      ];
-      for (const candidate of candidates) {
-        const timestamp = new Date(candidate || '').getTime();
-        if (!Number.isNaN(timestamp) && timestamp > 0) {
-          return timestamp;
-        }
-      }
-      return 0;
-    };
-    const compareDocDate = (left, right) => resolveSortDate(left) - resolveSortDate(right);
-    const sortDocs = (items) => {
-      const cloned = [...items];
-      if (sortBy === 'created_asc') {
-        return cloned.sort((a, b) => compareDocDate(a, b) || compareText(a?.area, b?.area) || compareText(a?.categoria, b?.categoria));
-      }
-      if (sortBy === 'area_asc') {
-        return cloned.sort((a, b) => compareText(a?.area, b?.area) || compareText(a?.categoria, b?.categoria) || compareDocDate(b, a));
-      }
-      if (sortBy === 'categoria_asc') {
-        return cloned.sort((a, b) => compareText(a?.categoria, b?.categoria) || compareText(a?.area, b?.area) || compareDocDate(b, a));
-      }
-      return cloned.sort((a, b) => compareDocDate(b, a) || compareText(a?.area, b?.area) || compareText(a?.categoria, b?.categoria));
-    };
+    const publishedDocs = Array.isArray(data?.documentos) ? data.documentos : [];
+    pagination.total = Number.isFinite(Number(data?.total)) ? Number(data.total) : publishedDocs.length;
+    const publishedOffset = Math.max(0, offset);
+    const pageFromOffset = Math.floor(publishedOffset / clampedLimit) + 1;
+    pagination.page = pageFromOffset;
+
     const allDocs = [
       ...processingDocs.map((doc) => ({ ...doc, _cardType: 'processing' })),
       ...failedDocs.map((doc) => ({ ...doc, _cardType: 'failed' })),
       ...publishedDocs.map((doc) => ({ ...doc, _cardType: 'published' })),
     ];
-    const orderedDocs = sortDocs(allDocs);
 
-    if (!orderedDocs.length) {
+    const totalDisplay = Number.isFinite(Number(pagination.total)) ? Number(pagination.total) : 0;
+    const totalPages = Math.max(1, Math.ceil(totalDisplay / clampedLimit));
+    if (pagination.page > totalPages) {
+      pagination.page = totalPages;
+      return loadPublishedDocs();
+    }
+
+    if (docsPrevButton) {
+      docsPrevButton.disabled = pagination.page <= 1 || pagination.total <= 0;
+    }
+    if (docsNextButton) {
+      docsNextButton.disabled = pagination.page >= totalPages || pagination.total <= 0;
+    }
+
+    const currentPage = Math.min(Math.max(1, pagination.page), totalPages);
+    const start = totalDisplay > 0 ? (currentPage - 1) * clampedLimit + 1 : 0;
+    const end = totalDisplay > 0 ? Math.min(currentPage * clampedLimit, totalDisplay) : 0;
+    if (docsPagerInfo) {
+      docsPagerInfo.textContent = `Página ${currentPage} de ${totalPages} — ${start} a ${end} de ${totalDisplay} documento(s)`;
+    }
+
+    if (!allDocs.length) {
       docsList.innerHTML = '<li>Nenhum documento publicado encontrado para essa busca.</li>';
       return;
     }
 
-    for (const doc of orderedDocs) {
+    for (const doc of allDocs) {
+      const normalizedTags = normalizeTagValues(doc?.tags);
+      const tagChips = normalizedTags
+        .slice(0, 4)
+        .map((tagName) => `<span class="tag-chip">${tagName}</span>`)
+        .join('');
+      const tagsOverflow = normalizedTags.length > 4
+        ? `<span class="tag-chip tag-chip--muted">+${normalizedTags.length - 4}</span>`
+        : '';
       const item = document.createElement('li');
       if (doc._cardType === 'processing') {
         item.className = 'doc-item doc-item-processing';
         item.innerHTML = `
           <div class="doc-item-body">
-            <strong>⏳ ${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
+            <strong class="doc-title">${truncateForCard(doc?.title || doc?.file_name || doc?.slug || 'Documento')}</strong>
             <div class="meta doc-meta-tags">
               <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
               <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
               <span class="status-tag status-tag-processing">Processando</span>
+              ${tagChips}${tagsOverflow}
             </div>
           </div>
           <span class="meta">${doc?.job_id || ''} · Início: ${doc?.created_at || ''}</span>
@@ -1681,10 +1934,11 @@ async function loadPublishedDocs() {
         item.className = 'doc-item doc-item-failed';
         item.innerHTML = `
           <div class="doc-item-body">
-            <strong>${doc?.title || doc?.file_name || doc?.slug || 'Documento'}</strong>
+            <strong class="doc-title">${truncateForCard(doc?.title || doc?.file_name || doc?.slug || 'Documento')}</strong>
             <div class="meta doc-meta-tags">
               <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
               <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              ${tagChips}${tagsOverflow}
               <button type="button" class="status-tag status-tag-failed">Falha</button>
             </div>
           </div>
@@ -1707,10 +1961,11 @@ async function loadPublishedDocs() {
         });
         item.innerHTML = `
           <div class="doc-item-body">
-            <strong>${docTitleOf(doc) || doc.slug}</strong>
+            <strong class="doc-title">${truncateForCard(docTitleOf(doc) || doc.slug || 'Documento')}</strong>
             <div class="meta doc-meta-tags">
               <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
               <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              ${tagChips}${tagsOverflow}
             </div>
           </div>
           <span class="meta">v${docPublishedVersionOf(doc) || ''} · ${doc.updated_at || ''}</span>
@@ -1781,6 +2036,7 @@ function showDashboardCreateFlow() {
   const docSlug = document.getElementById('docSlug');
   const docTitle = document.getElementById('docTitle');
   const docTags = document.getElementById('docTags');
+  const docAiPrompt = document.getElementById('docAiPrompt');
   const docContent = document.getElementById('docContent');
   const docPublish = document.getElementById('docPublish');
   const docFile = document.getElementById('docFile');
@@ -1789,7 +2045,8 @@ function showDashboardCreateFlow() {
   if (docCategoria) docCategoria.value = '';
   if (docSlug) docSlug.value = '';
   if (docTitle) docTitle.value = '';
-  if (docTags) docTags.value = '';
+  if (docTags) setCreateSessionTags([]);
+  if (docAiPrompt) docAiPrompt.value = '';
   if (docFile) docFile.value = '';
   if (docContent) docContent.value = '';
   if (docPublish) docPublish.checked = true;
@@ -1811,6 +2068,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
   const docPublish = document.getElementById('docPublish');
   const docFile = document.getElementById('docFile');
   const docContent = document.getElementById('docContent');
+  const docAiPrompt = document.getElementById('docAiPrompt');
 
   const file = docFile?.files?.[0];
   const content = docContent?.value || '';
@@ -1830,11 +2088,12 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
   const title = docTitle?.value || '';
   const generatedSlug = slugifyText(title);
   const slug = (docSlug?.value || '').trim() || generatedSlug;
-  const tags = parseTags(docTags?.value || '');
+  const tags = collectCreateTags();
   const publicar = Boolean(docPublish?.checked);
   const normalizedArea = area || FALLBACK_AREA;
   const normalizedCategoria = categoria || FALLBACK_CATEGORIA;
   const baseVersion = normalizeVersion(selectedDocument?.version || selectedDocument?.published_version || selectedDocument?.versao_publicada || '');
+  const aiPrompt = docAiPrompt?.value?.trim() || '';
 
   if (docSlug && !docSlug.value.trim() && generatedSlug) {
     docSlug.value = generatedSlug;
@@ -1845,6 +2104,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
     categoria: normalizedCategoria,
     slug,
     title,
+    ai_prompt: aiPrompt,
   };
 
   const isFileUpload = Boolean(file);
@@ -1866,6 +2126,9 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
       }
       if (baseVersion) {
         form.set('base_version', baseVersion);
+      }
+      if (aiPrompt) {
+        form.set('ai_prompt', aiPrompt);
       }
       if (publicar) {
         form.set('publicar', 'true');
@@ -1906,6 +2169,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
         title,
         content,
         tags,
+        ai_prompt: aiPrompt,
         ...(baseVersion ? { base_version: baseVersion } : {}),
         publicar,
       };
@@ -2012,14 +2276,19 @@ if (addCategoriaForm) {
   addCategoriaForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const value = categoriaInput?.value || '';
+    const area = categoriaAreaSelect?.value || '';
     if (!value.trim()) {
       renderTaxonomyError('Informe o nome da categoria.');
+      return;
+    }
+    if (!area) {
+      renderTaxonomyError('Selecione a área da categoria.');
       return;
     }
     try {
       await apiFetch(`/api/v1/empresas/${state.companyId}/categorias`, {
         method: 'POST',
-        body: JSON.stringify({ name: value.trim() }),
+        body: JSON.stringify({ name: value.trim(), area }),
       });
       if (categoriaInput) {
         categoriaInput.value = '';
@@ -2104,6 +2373,23 @@ if (areasList) {
   areasList.addEventListener('click', async (event) => {
     const button = event.target.closest('.taxonomy-remove');
     if (!button) {
+      const areaItem = event.target.closest('.taxonomy-item[data-kind="areas"]');
+      if (!areaItem) {
+        return;
+      }
+      const name = areaItem.dataset.name;
+      if (!name) return;
+      selectedTaxonomyArea = (selectedTaxonomyArea === name ? '' : name);
+      if (categoriaAreaSelect) {
+        setFormSelectValue(categoriaAreaSelect, selectedTaxonomyArea);
+        if (selectedTaxonomyArea) {
+          categoriaAreaSelect.value = selectedTaxonomyArea;
+        }
+      }
+      if (categoriaAreaSelect && categoriaAreaSelect.value !== selectedTaxonomyArea) {
+        categoriaAreaSelect.value = selectedTaxonomyArea;
+      }
+      renderTaxonomies();
       return;
     }
     const name = button.dataset.name;
@@ -2112,6 +2398,9 @@ if (areasList) {
       await apiFetch(`/api/v1/empresas/${state.companyId}/areas?name=${encodeURIComponent(name)}`, {
         method: 'DELETE',
       });
+      if (selectedTaxonomyArea === name) {
+        selectedTaxonomyArea = '';
+      }
       await loadTaxonomies();
       showToast('Área removida.');
     } catch (error) {
@@ -2128,8 +2417,13 @@ if (categoriasList) {
     }
     const name = button.dataset.name;
     if (!name) return;
+    const area = button.dataset.area || '';
+    const query = new URLSearchParams();
+    if (area) {
+      query.set('area', area);
+    }
     try {
-      await apiFetch(`/api/v1/empresas/${state.companyId}/categorias?name=${encodeURIComponent(name)}`, {
+      await apiFetch(`/api/v1/empresas/${state.companyId}/categorias?${query.toString() ? `${query.toString()}&` : ''}name=${encodeURIComponent(name)}`, {
         method: 'DELETE',
       });
       await loadTaxonomies();
@@ -2157,11 +2451,31 @@ document.getElementById('publishForm').addEventListener('submit', async (event) 
   }
 });
 
-filterArea?.addEventListener('change', loadPublishedDocs);
-filterCategoria?.addEventListener('change', loadPublishedDocs);
-document.getElementById('filterTag').addEventListener('change', loadPublishedDocs);
-document.getElementById('filterBusca').addEventListener('change', loadPublishedDocs);
-document.getElementById('sortDocs').addEventListener('change', loadPublishedDocs);
+function resetPaginationAndLoadPublishedDocs() {
+  pagination.page = 1;
+  void loadPublishedDocs();
+}
+
+filterArea?.addEventListener('change', resetPaginationAndLoadPublishedDocs);
+filterCategoria?.addEventListener('change', resetPaginationAndLoadPublishedDocs);
+document.getElementById('filterTag').addEventListener('change', resetPaginationAndLoadPublishedDocs);
+document.getElementById('filterBusca').addEventListener('change', resetPaginationAndLoadPublishedDocs);
+document.getElementById('sortDocs').addEventListener('change', resetPaginationAndLoadPublishedDocs);
+docsPrevButton?.addEventListener('click', () => {
+  if (pagination.page <= 1) {
+    return;
+  }
+  pagination.page -= 1;
+  void loadPublishedDocs();
+});
+docsNextButton?.addEventListener('click', () => {
+  const totalPages = Math.max(1, Math.ceil((pagination.total || 0) / pagination.limit));
+  if (pagination.page >= totalPages) {
+    return;
+  }
+  pagination.page += 1;
+  void loadPublishedDocs();
+});
 
 docModalCloseBtn.addEventListener('click', closeDocumentModal);
 docModalOverlay.addEventListener('click', closeDocumentModal);
