@@ -33,6 +33,7 @@ class DocumentCreatePayload(BaseModel):
     content: str
     tags: list[str] = []
     ai_prompt: Optional[str] = None
+    data_validade: Optional[str] = None
     base_version: Union[str, None] = None
     publicar: bool = False
 
@@ -342,6 +343,7 @@ def create_document(
             author_email=_author_email(user),
             tags=payload.tags,
             ai_prompt=payload.ai_prompt,
+            data_validade=payload.data_validade,
             is_published=payload.publicar,
             base_version=payload.base_version,
         )
@@ -495,6 +497,7 @@ async def upload_document(
     publicar: bool = Form(default=False),
     title: str = Form(None),
     ai_prompt: Optional[str] = Form(default=None),
+    data_validade: Optional[str] = Form(default=None),
     tags: str = Form(""),
     file: UploadFile = File(...),
     user: TokenData = Depends(require_role("admin", "editor")),
@@ -527,6 +530,7 @@ async def upload_document(
             "categoria": categoria,
             "title": title,
             "file_name": file_name,
+            "data_validade": data_validade,
             "publicar": publicar,
             "created_at": datetime.utcnow().isoformat() + "Z",
             "updated_at": datetime.utcnow().isoformat() + "Z",
@@ -549,6 +553,7 @@ async def upload_document(
                     tags=tag_list,
                     title=title,
                     ai_prompt=ai_prompt,
+                    data_validade=data_validade,
                 )
                 documento_payload = {**result}
                 if documento_payload.get("title") is not None and documento_payload.get("titulo") is None:

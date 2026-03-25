@@ -1139,6 +1139,18 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
   border-color: #d7cdbd;
 }
 
+.status-tag-warning {
+  color: #7a4a00;
+  background: #fde9c8;
+  border-color: #f3c88a;
+}
+
+.status-tag-expired {
+  color: #7b1f24;
+  background: #f7d9dc;
+  border-color: #e6a9af;
+}
+
 .status-tag-failed {
   color: #8c342f;
   background: #fbe2dd;

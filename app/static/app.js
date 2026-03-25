@@ -102,6 +102,7 @@ const docSlugInput = document.getElementById('docSlug');
 const docTitleInput = document.getElementById('docTitle');
 const docContentInput = document.getElementById('docContent');
 const docAiPromptInput = document.getElementById('docAiPrompt');
+const docValidityInput = document.getElementById('docValidity');
 const docTagsInput = document.getElementById('docTags');
 const docTagBadges = document.getElementById('docTagBadges');
 const docsPrevButton = document.getElementById('docsPrev');
@@ -1243,7 +1244,7 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
     docModalEditBtn.classList.remove('hidden-view');
   }
   docModalTitle.textContent = truncateForCard(docTitleOf(doc) || doc.slug);
-  docModalMeta.textContent = `${doc.area} / ${doc.categoria} · ${versionLabel} · ${doc.updated_at || ''}`;
+  docModalMeta.textContent = `${doc.area} / ${doc.categoria} · ${versionLabel} · ${doc.updated_at || ''}${formatValidityMeta(doc?.data_validade)}`;
   docModalContent.textContent = 'Carregando conteúdo...';
   docModal.setAttribute('aria-hidden', 'false');
   docModal.classList.add('open');
@@ -1272,7 +1273,7 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
       const payloadPublished = contentPublishedOf(payload);
       if (payloadVersion) {
         selectedDocument = { ...selectedDocument, version: payloadVersion, published: payloadPublished };
-        docModalMeta.textContent = `${doc.area} / ${doc.categoria} · v${payloadVersion} · ${payload.updated_at || doc.updated_at || ''}`;
+        docModalMeta.textContent = `${doc.area} / ${doc.categoria} · v${payloadVersion} · ${payload.updated_at || doc.updated_at || ''}${formatValidityMeta(payload?.data_validade || doc?.data_validade)}`;
         if (modalVersionPublishToggle) {
           modalVersionPublishToggle.checked = payloadPublished;
           modalVersionPublishToggle.disabled = !shouldShowPublish;
@@ -1285,6 +1286,9 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
       if (payloadTitle) {
         selectedDocument = { ...selectedDocument, title: payloadTitle };
         docModalTitle.textContent = truncateForCard(payloadTitle);
+      }
+      if (payload?.data_validade !== undefined) {
+        selectedDocument = { ...selectedDocument, data_validade: payload.data_validade };
       }
       if (payload?.tags) {
         selectedDocument = { ...selectedDocument, tags: payload.tags };
@@ -1386,6 +1390,7 @@ function openCreateForSelectedDocument() {
 
   const contentTarget = document.getElementById('docContent');
   const promptTarget = document.getElementById('docAiPrompt');
+  const validityTarget = document.getElementById('docValidity');
   contentTarget.value = '';
   setFormSelectValue(docArea, selectedDocument.area || '');
   setFormSelectValue(docCategoria, selectedDocument.categoria || '');
@@ -1395,6 +1400,9 @@ function openCreateForSelectedDocument() {
   setCreateSessionTags(selectedDocument.tags || []);
   if (promptTarget) {
     promptTarget.value = selectedDocument.ai_prompt || '';
+  }
+  if (validityTarget) {
+    validityTarget.value = selectedDocument.data_validade || '';
   }
   const fileInput = document.getElementById('docFile');
   if (fileInput) {
@@ -1410,6 +1418,9 @@ function openCreateForSelectedDocument() {
       }
       if (payload?.tags) {
         setCreateSessionTags(payload.tags || []);
+      }
+      if (payload?.data_validade && validityTarget) {
+        validityTarget.value = payload.data_validade;
       }
       const selectedVersion = contentVersionOf(payload);
       if (selectedVersion) {
@@ -1454,6 +1465,41 @@ function parseTags(value) {
     .split(',')
     .map((t) => t.trim())
     .filter(Boolean);
+}
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const datePart = raw.split('T')[0];
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+}
+
+function buildValidityBadge(dataValidade) {
+  const parsed = parseDateOnly(dataValidade);
+  if (!parsed) return '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const warn = new Date(today);
+  warn.setDate(today.getDate() + 1);
+  if (today >= parsed) {
+    return `<span class="status-tag status-tag-expired" title="Validade: ${dataValidade}">Expirado</span>`;
+  }
+  if (warn >= parsed) {
+    return `<span class="status-tag status-tag-warning" title="Validade: ${dataValidade}">Prox. Expirar</span>`;
+  }
+  return '';
+}
+
+function formatValidityMeta(dataValidade) {
+  if (!dataValidade) return '';
+  return ` · validade: ${dataValidade}`;
 }
 
 function setCreateSessionTags(nextTags = [], pendingInput = '') {
@@ -1915,6 +1961,9 @@ async function loadPublishedDocs() {
       const tagsOverflow = normalizedTags.length > 4
         ? `<span class="tag-chip tag-chip--muted">+${normalizedTags.length - 4}</span>`
         : '';
+      const validityBadge = doc?._cardType === 'published'
+        ? buildValidityBadge(doc?.data_validade)
+        : '';
       const item = document.createElement('li');
       if (doc._cardType === 'processing') {
         item.className = 'doc-item doc-item-processing';
@@ -1965,6 +2014,7 @@ async function loadPublishedDocs() {
             <div class="meta doc-meta-tags">
               <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
               <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              ${validityBadge}
               ${tagChips}${tagsOverflow}
             </div>
           </div>
@@ -2037,6 +2087,7 @@ function showDashboardCreateFlow() {
   const docTitle = document.getElementById('docTitle');
   const docTags = document.getElementById('docTags');
   const docAiPrompt = document.getElementById('docAiPrompt');
+  const docValidity = document.getElementById('docValidity');
   const docContent = document.getElementById('docContent');
   const docPublish = document.getElementById('docPublish');
   const docFile = document.getElementById('docFile');
@@ -2047,6 +2098,7 @@ function showDashboardCreateFlow() {
   if (docTitle) docTitle.value = '';
   if (docTags) setCreateSessionTags([]);
   if (docAiPrompt) docAiPrompt.value = '';
+  if (docValidity) docValidity.value = '';
   if (docFile) docFile.value = '';
   if (docContent) docContent.value = '';
   if (docPublish) docPublish.checked = true;
@@ -2069,6 +2121,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
   const docFile = document.getElementById('docFile');
   const docContent = document.getElementById('docContent');
   const docAiPrompt = document.getElementById('docAiPrompt');
+  const docValidity = document.getElementById('docValidity');
 
   const file = docFile?.files?.[0];
   const content = docContent?.value || '';
@@ -2094,6 +2147,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
   const normalizedCategoria = categoria || FALLBACK_CATEGORIA;
   const baseVersion = normalizeVersion(selectedDocument?.version || selectedDocument?.published_version || selectedDocument?.versao_publicada || '');
   const aiPrompt = docAiPrompt?.value?.trim() || '';
+  const dataValidade = (docValidity?.value || '').trim();
 
   if (docSlug && !docSlug.value.trim() && generatedSlug) {
     docSlug.value = generatedSlug;
@@ -2105,6 +2159,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
     slug,
     title,
     ai_prompt: aiPrompt,
+    data_validade: dataValidade,
   };
 
   const isFileUpload = Boolean(file);
@@ -2130,6 +2185,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
       if (aiPrompt) {
         form.set('ai_prompt', aiPrompt);
       }
+      form.set('data_validade', dataValidade);
       if (publicar) {
         form.set('publicar', 'true');
       }
@@ -2170,6 +2226,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
         content,
         tags,
         ai_prompt: aiPrompt,
+        data_validade: dataValidade,
         ...(baseVersion ? { base_version: baseVersion } : {}),
         publicar,
       };

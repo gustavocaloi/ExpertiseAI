@@ -462,6 +462,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
                     errors="ignore",
                 ) or "")
             )
+            data_validade = _safe_str(first_metadata.get("data_validade"))
 
             meta = {
                 "document_uuid": str(uuid4()),
@@ -472,6 +473,7 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
                 "categoria": categoria,
                 "tags": merged_tags,
                 "ai_prompt": first_metadata.get("ai_prompt", ""),
+                "data_validade": data_validade,
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "published_version": published_version,
@@ -536,6 +538,7 @@ def _frontmatter(markdown: str, metadata: Dict[str, Any]) -> str:
         f"published_at: {metadata['published_at']}",
         f"created_at: {metadata['created_at']}",
         f"updated_at: {metadata['updated_at']}",
+        f"data_validade: {metadata.get('data_validade') or ''}",
         f"tags: [{', '.join(metadata.get('tags', []))}]",
         f"ai_prompt: {json.dumps(metadata.get('ai_prompt') or '')}",
         "---",
@@ -554,6 +557,7 @@ def create_or_update_text_document(
     author_email: str,
     tags: Iterable[str] = (),
     ai_prompt: Optional[str] = None,
+    data_validade: Optional[str] = None,
     is_published: bool = False,
     base_version: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -568,6 +572,7 @@ def create_or_update_text_document(
     doc_dir = _doc_dir(company_id, area_n, categoria_n, slug_n)
     meta_path = _meta_path(company_id, area_n, categoria_n, slug_n)
 
+    data_validade_value = (data_validade or "").strip()
     if not meta_path.exists():
         meta = {
             "document_uuid": str(uuid4()),
@@ -578,6 +583,7 @@ def create_or_update_text_document(
             "categoria": categoria_n,
             "tags": list(tags),
             "ai_prompt": ai_prompt or "",
+            "data_validade": data_validade_value,
             "created_at": _now(),
             "updated_at": _now(),
             "published_version": "",
@@ -589,6 +595,8 @@ def create_or_update_text_document(
             meta["title"] = title
         if ai_prompt is not None:
             meta["ai_prompt"] = ai_prompt
+        if data_validade is not None:
+            meta["data_validade"] = data_validade_value
         meta["updated_at"] = _now()
         meta["tags"] = list(tags) if tags else meta.get("tags", [])
 
@@ -611,6 +619,7 @@ def create_or_update_text_document(
         "ai_prompt": ai_prompt or "",
     }
 
+    current_data_validade = meta.get("data_validade", "")
     # se for publicada, publica imediatamente e despublica as outras
     if is_published:
         for v in meta["versions"]:
@@ -633,6 +642,7 @@ def create_or_update_text_document(
             "published_at": _now() if is_published else "",
             "created_at": _now(),
             "updated_at": _now(),
+            "data_validade": current_data_validade,
             "tags": list(tags),
             "ai_prompt": ai_prompt or "",
         },
@@ -655,6 +665,7 @@ def create_or_update_text_document(
         "categoria": categoria_n,
         "slug": slug_n,
         "ai_prompt": meta.get("ai_prompt", ""),
+        "data_validade": meta.get("data_validade", ""),
         "version_uuid": version_meta.get("version_uuid"),
         "version": _version_display(version),
         "published_version": meta.get("published_version", ""),
@@ -701,6 +712,7 @@ async def import_file_to_markdown(
     tags: Iterable[str] = (),
     title: Optional[str] = None,
     ai_prompt: Optional[str] = None,
+    data_validade: Optional[str] = None,
 ) -> Dict[str, Any]:
     raw = await file.read()
     return await import_file_to_markdown_bytes(
@@ -715,6 +727,7 @@ async def import_file_to_markdown(
         tags=tags,
         title=title,
         ai_prompt=ai_prompt,
+        data_validade=data_validade,
     )
 
 
@@ -730,6 +743,7 @@ async def import_file_to_markdown_path(
     tags: Iterable[str] = (),
     title: Optional[str] = None,
     ai_prompt: Optional[str] = None,
+    data_validade: Optional[str] = None,
 ) -> Dict[str, Any]:
     normalized_path = Path(file_path)
     if not normalized_path.exists():
@@ -754,6 +768,7 @@ async def import_file_to_markdown_path(
         author_email=author_email,
         tags=tags,
         ai_prompt=ai_prompt,
+        data_validade=data_validade,
         base_version=base_version,
         is_published=False,
     )
@@ -771,6 +786,7 @@ async def import_file_to_markdown_bytes(
     tags: Iterable[str] = (),
     title: Optional[str] = None,
     ai_prompt: Optional[str] = None,
+    data_validade: Optional[str] = None,
 ) -> Dict[str, Any]:
     ext = Path(filename or "").suffix.lower()
     if not raw:
@@ -795,6 +811,7 @@ async def import_file_to_markdown_bytes(
         author_email=author_email,
         tags=tags,
         ai_prompt=ai_prompt,
+        data_validade=data_validade,
         base_version=base_version,
         is_published=False,
     )
@@ -1029,6 +1046,7 @@ def read_published_documents(
             "categoria": meta.get("categoria"),
             "tags": meta.get("tags", []),
             "ai_prompt": meta.get("ai_prompt", ""),
+            "data_validade": meta.get("data_validade", ""),
             "published_version_uuid": next(
                 (
                     entry.get("version_uuid")
@@ -1129,6 +1147,7 @@ def read_published_document_content(
         "titulo": meta.get("title", slug_n),
         "tags": meta.get("tags", []),
         "ai_prompt": selected_entry.get("ai_prompt") or meta.get("ai_prompt", ""),
+        "data_validade": meta.get("data_validade", ""),
         "versao": selected_version,
         "publicado": bool(selected_entry.get("published")),
         "updated_at": meta.get("updated_at"),

@@ -122,6 +122,7 @@ arquivo_publicado: v2.md
   - Retorna apenas as versões ativas/publicadas da base de conhecimento daquela empresa.
   - Suporte recomendado de filtros: `?area=`, `?categoria=`, `?tag=`, `?busca=`, `?limit=`, `?offset=`.
   - Controle de acesso por JWT/API token + validação de escopo da empresa.
+  - Campo adicional por documento: `data_validade` (formato `YYYY-MM-DD`) para controle de expiração.
 
 ### 8. Observabilidade e governança
 - Métricas de uso: acessos, busca mais frequente, artigos críticos.
