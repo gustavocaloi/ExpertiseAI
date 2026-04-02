@@ -1145,6 +1145,12 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
   border-color: #f3c88a;
 }
 
+.status-tag-draft {
+  color: #2b4b6a;
+  background: #e6f2ff;
+  border-color: #b7d6f5;
+}
+
 .status-tag-expired {
   color: #7b1f24;
   background: #f7d9dc;

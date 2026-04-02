@@ -171,6 +171,16 @@ function docPublishedVersionOf(doc) {
   return doc?.published_version || doc?.versao_publicada || doc?.version || '';
 }
 
+function docIsPublished(doc) {
+  if (doc?.published !== undefined) {
+    return Boolean(doc.published);
+  }
+  if (doc?.published_version || doc?.versao_publicada) {
+    return true;
+  }
+  return false;
+}
+
 function contentVersionOf(payload) {
   return payload?.version || payload?.versao || payload?.content_version || payload?.conteudo_versao || '';
 }
@@ -1887,6 +1897,7 @@ async function loadPublishedDocs() {
   if (tag) query.set('tag', tag);
   if (busca) query.set('busca', busca);
   query.set('include_content', busca ? 'true' : 'false');
+  query.set('include_unpublished', 'true');
   query.set('limit', String(clampedLimit));
   query.set('offset', String(offset));
   query.set('sort', sortBy);
@@ -1907,15 +1918,15 @@ async function loadPublishedDocs() {
 
   try {
     const [data, processingData, failedData] = await Promise.all([
-      apiFetch(`/api/v1/empresas/${state.companyId}/documentos/publicados?${query.toString()}`),
+      apiFetch(`/api/v1/empresas/${state.companyId}/documentos?${query.toString()}`),
       apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=processing`),
       apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=failed`),
     ]);
     docsList.innerHTML = '';
     const processingDocs = (Array.isArray(processingData?.documentos) ? processingData.documentos : []).filter(matchesDashboardFilters);
     const failedDocs = (Array.isArray(failedData?.documentos) ? failedData.documentos : []).filter(matchesDashboardFilters);
-    const publishedDocs = Array.isArray(data?.documentos) ? data.documentos : [];
-    pagination.total = Number.isFinite(Number(data?.total)) ? Number(data.total) : publishedDocs.length;
+    const listedDocs = Array.isArray(data?.documentos) ? data.documentos : [];
+    pagination.total = Number.isFinite(Number(data?.total)) ? Number(data.total) : listedDocs.length;
     const publishedOffset = Math.max(0, offset);
     const pageFromOffset = Math.floor(publishedOffset / clampedLimit) + 1;
     pagination.page = pageFromOffset;
@@ -1923,7 +1934,7 @@ async function loadPublishedDocs() {
     const allDocs = [
       ...processingDocs.map((doc) => ({ ...doc, _cardType: 'processing' })),
       ...failedDocs.map((doc) => ({ ...doc, _cardType: 'failed' })),
-      ...publishedDocs.map((doc) => ({ ...doc, _cardType: 'published' })),
+      ...listedDocs.map((doc) => ({ ...doc, _cardType: docIsPublished(doc) ? 'published' : 'draft' })),
     ];
 
     const totalDisplay = Number.isFinite(Number(pagination.total)) ? Number(pagination.total) : 0;
@@ -1948,7 +1959,7 @@ async function loadPublishedDocs() {
     }
 
     if (!allDocs.length) {
-      docsList.innerHTML = '<li>Nenhum documento publicado encontrado para essa busca.</li>';
+      docsList.innerHTML = '<li>Nenhum documento encontrado para essa busca.</li>';
       return;
     }
 
@@ -1963,6 +1974,9 @@ async function loadPublishedDocs() {
         : '';
       const validityBadge = doc?._cardType === 'published'
         ? buildValidityBadge(doc?.data_validade)
+        : '';
+      const draftBadge = doc?._cardType === 'draft'
+        ? '<span class="status-tag status-tag-draft">RASCUNHO</span>'
         : '';
       const item = document.createElement('li');
       if (doc._cardType === 'processing') {
@@ -2015,6 +2029,7 @@ async function loadPublishedDocs() {
               <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
               <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
               ${validityBadge}
+              ${draftBadge}
               ${tagChips}${tagsOverflow}
             </div>
           </div>

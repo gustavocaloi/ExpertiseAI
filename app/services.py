@@ -961,6 +961,7 @@ def read_published_documents(
     limit: int = 50,
     offset: int = 0,
     include_content: bool = True,
+    include_unpublished: bool = False,
     sort_by: str = "created_desc",
     return_total: bool = False,
 ) -> Dict[str, Any] | list[Dict[str, Any]]:
@@ -998,8 +999,19 @@ def read_published_documents(
             continue
 
         published_version = str(meta.get("published_version", "") or "")
+        selected_version = published_version
         if not published_version:
-            continue
+            if not include_unpublished:
+                continue
+            versions = [
+                entry
+                for entry in meta.get("versions", [])
+                if isinstance(entry, dict) and entry.get("version") is not None
+            ]
+            if not versions:
+                continue
+            versions = sorted(versions, key=lambda item: _version_key(item["version"]))
+            selected_version = str(versions[-1]["version"])
 
         if term:
             if (
@@ -1014,7 +1026,7 @@ def read_published_documents(
                             area=meta.get("area", ""),
                             categoria=meta.get("categoria", ""),
                             slug=meta.get("slug", ""),
-                            version=published_version,
+                            version=selected_version,
                         )
                         if term not in str(content_payload.get("content", "")).lower():
                             continue
@@ -1031,7 +1043,7 @@ def read_published_documents(
                     area=meta.get("area", ""),
                     categoria=meta.get("categoria", ""),
                     slug=meta.get("slug", ""),
-                    version=published_version,
+                    version=selected_version,
                 ).get("content", "")
             except (FileNotFoundError, ValueError, OSError):
                 published_content = ""
@@ -1047,11 +1059,12 @@ def read_published_documents(
             "tags": meta.get("tags", []),
             "ai_prompt": meta.get("ai_prompt", ""),
             "data_validade": meta.get("data_validade", ""),
+            "version": selected_version,
             "published_version_uuid": next(
                 (
                     entry.get("version_uuid")
                     for entry in meta.get("versions", [])
-                    if _version_matches(entry.get("version"), published_version)
+                    if _version_matches(entry.get("version"), selected_version)
                 ),
                 None,
             ),
@@ -1060,7 +1073,7 @@ def read_published_documents(
                 (
                     entry.get("version_uuid")
                     for entry in meta.get("versions", [])
-                    if _version_matches(entry.get("version"), published_version)
+                    if _version_matches(entry.get("version"), selected_version)
                 ),
                 None,
             ),

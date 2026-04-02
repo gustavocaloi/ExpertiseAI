@@ -249,6 +249,7 @@ def list_documents(
     offset: int = Query(default=0, ge=0),
     sort: str = Query(default="created_desc"),
     include_content: bool = Query(default=False),
+    include_unpublished: bool = Query(default=True),
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
@@ -261,6 +262,7 @@ def list_documents(
         limit=limit,
         offset=offset,
         include_content=include_content,
+        include_unpublished=include_unpublished,
         sort_by=sort,
         return_total=True,
     )
