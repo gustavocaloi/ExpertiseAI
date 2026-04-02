@@ -89,6 +89,9 @@ const userAdminMsg = document.getElementById('userAdminMsg');
 const editHistorySession = document.getElementById('editHistorySession');
 const editVersionsList = document.getElementById('editVersionsList');
 const editHistoryHint = document.getElementById('editHistoryHint');
+const attachmentsSection = document.getElementById('attachmentsSection');
+const attachmentsList = document.getElementById('attachmentsList');
+const attachmentsHint = document.getElementById('attachmentsHint');
 const versionPreviewSession = document.getElementById('versionPreviewSession');
 const versionPreviewInfo = document.getElementById('versionPreviewInfo');
 const versionPreviewContent = document.getElementById('versionPreviewContent');
@@ -141,6 +144,23 @@ function truncateForCard(value, maxChars = titleMaxChars) {
     return normalized;
   }
   return `${normalized.slice(0, maxChars)}...`;
+}
+
+function formatFileSize(bytesValue) {
+  const bytes = Number(bytesValue || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '';
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function normalizeTagValue(value) {
@@ -1031,6 +1051,15 @@ function hideEditHistory() {
 
   editHistorySession.classList.add('hidden-view');
   editVersionsList.innerHTML = '';
+  if (attachmentsSection) {
+    attachmentsSection.classList.add('hidden-view');
+  }
+  if (attachmentsList) {
+    attachmentsList.innerHTML = '';
+  }
+  if (attachmentsHint) {
+    attachmentsHint.textContent = 'Nenhum anexo disponível.';
+  }
   if (editHistoryHint) {
     editHistoryHint.textContent = 'Selecione um documento publicado para visualizar o histórico.';
   }
@@ -1070,6 +1099,104 @@ function setTimelineActiveVersion(version) {
   const items = editVersionsList.querySelectorAll('.timeline-item');
   items.forEach((item) => {
     item.classList.toggle('active', normalizeVersion(item.dataset.version) === target);
+  });
+}
+
+async function downloadAttachment(meta, attachment) {
+  if (!meta || !attachment) {
+    return;
+  }
+  if (!state.companyId) {
+    showToast('Empresa não definida para baixar o anexo.', 'error');
+    return;
+  }
+  if (!state.token && isAccessControlEnabled()) {
+    showToast('Faça login para baixar o anexo.', 'error');
+    return;
+  }
+
+  const query = new URLSearchParams();
+  if (attachment.id) {
+    query.set('attachment_id', attachment.id);
+  }
+  const url = `/api/v1/empresas/${state.companyId}/documentos/${encodeURIComponent(meta.area || FALLBACK_AREA)}/${encodeURIComponent(meta.categoria || FALLBACK_CATEGORIA)}/${encodeURIComponent(meta.slug || '')}/anexo${query.toString() ? `?${query}` : ''}`;
+  try {
+    const res = await fetch(url, {
+      headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.detail || `Erro ${res.status}`);
+    }
+    const blob = await res.blob();
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = attachment.file_name || 'anexo';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
+  } catch (error) {
+    showToast(error.message || 'Não foi possível baixar o anexo.', 'error');
+  }
+}
+
+function renderAttachments(meta) {
+  if (!attachmentsSection || !attachmentsList) {
+    return;
+  }
+  const attachments = Array.isArray(meta?.attachments) ? meta.attachments : [];
+  attachmentsList.innerHTML = '';
+  if (!attachments.length) {
+    attachmentsSection.classList.add('hidden-view');
+    if (attachmentsHint) {
+      attachmentsHint.textContent = 'Nenhum anexo disponível.';
+    }
+    return;
+  }
+
+  attachmentsSection.classList.remove('hidden-view');
+  if (attachmentsHint) {
+    attachmentsHint.textContent = 'Clique para baixar os anexos do documento.';
+  }
+  attachments.forEach((attachment, index) => {
+    const fileName = attachment?.file_name || `anexo-${index + 1}`;
+    const sizeLabel = formatFileSize(attachment?.size_bytes);
+    const uploadedAt = attachment?.uploaded_at || '';
+    const metaLine = [sizeLabel, uploadedAt].filter(Boolean).join(' · ');
+
+    const li = document.createElement('li');
+    li.className = 'attachment-item';
+    const name = document.createElement('span');
+    name.className = 'attachment-name';
+    name.textContent = fileName;
+    const metaInfo = document.createElement('span');
+    metaInfo.className = 'attachment-meta';
+    metaInfo.textContent = metaLine;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'attachment-link';
+    button.innerHTML = `
+      <span class="attachment-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+          <path d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4.01 4a1 1 0 0 1-1.4 0l-4.01-4a1 1 0 1 1 1.4-1.42l2.32 2.3V4a1 1 0 0 1 1-1zM5 19a1 1 0 0 1 1-1h12a1 1 0 0 1 0 2H6a1 1 0 0 1-1-1z"></path>
+        </svg>
+      </span>
+      <span>Baixar</span>
+    `;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      downloadAttachment(meta, attachment);
+    });
+
+    li.appendChild(name);
+    if (metaLine) {
+      li.appendChild(metaInfo);
+    }
+    li.appendChild(button);
+    attachmentsList.appendChild(li);
   });
 }
 
@@ -1125,6 +1252,7 @@ function renderEditHistory(meta) {
     editVersionsList.appendChild(li);
   }
 
+  renderAttachments(meta);
   editHistorySession.classList.remove('hidden-view');
   if (editHistoryHint) {
     editHistoryHint.textContent = `Histórico completo de "${docTitleOf(meta) || ''}".`;

@@ -745,6 +745,75 @@ button.ghost { background: transparent; color: var(--olive); border: 1px solid v
   box-shadow: 0 0 0 1px rgba(138, 144, 122, 0.22);
 }
 
+.attachments-panel {
+  margin-top: 16px;
+}
+
+.attachment-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.attachment-item {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e2dccd;
+  background: #fbfaf6;
+}
+
+.attachment-name {
+  font-weight: 600;
+  color: #3a3630;
+  word-break: break-word;
+}
+
+.attachment-meta {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  grid-column: 1 / 2;
+}
+
+.attachment-link {
+  border: 1px solid #c8d5ee;
+  background: #eef4ff;
+  color: #274664;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attachment-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attachment-icon svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  display: block;
+}
+
+.attachment-link:hover,
+.attachment-link:focus-visible {
+  background: #dfeaff;
+  border-color: #a9c2e8;
+}
+
 .version-preview-content {
   margin: 10px 0 0;
   min-height: 200px;

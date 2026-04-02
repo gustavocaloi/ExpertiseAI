@@ -524,6 +524,34 @@ def _version_matches(a: Any, b: Any) -> bool:
         return str(a) == str(b)
 
 
+def _sanitize_filename(name: str) -> str:
+    candidate = Path(name or "").name.strip()
+    if not candidate:
+        return "anexo"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", candidate).strip("-")
+    return safe or "anexo"
+
+
+def _attachment_dir(company_id: int, area: str, categoria: str, slug: str) -> Path:
+    return _doc_dir(company_id, area, categoria, slug) / "attachments"
+
+
+def _public_attachments(meta: Dict[str, Any]) -> list[Dict[str, Any]]:
+    attachments = meta.get("attachments") or []
+    out: list[Dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "id": item.get("id"),
+            "file_name": item.get("file_name"),
+            "content_type": item.get("content_type"),
+            "size_bytes": item.get("size_bytes"),
+            "uploaded_at": item.get("uploaded_at"),
+        })
+    return out
+
+
 def _frontmatter(markdown: str, metadata: Dict[str, Any]) -> str:
     fm_lines = [
         "---",
@@ -588,6 +616,7 @@ def create_or_update_text_document(
             "updated_at": _now(),
             "published_version": "",
             "versions": [],
+            "attachments": [],
         }
     else:
         meta = _read_meta(company_id, area_n, categoria_n, slug_n)
@@ -599,6 +628,8 @@ def create_or_update_text_document(
             meta["data_validade"] = data_validade_value
         meta["updated_at"] = _now()
         meta["tags"] = list(tags) if tags else meta.get("tags", [])
+        if meta.get("attachments") is None:
+            meta["attachments"] = []
 
     if base_version is not None:
         base_version_value = str(base_version).strip()
@@ -673,6 +704,78 @@ def create_or_update_text_document(
     }
 
 
+def attach_document_file(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+    source_path: Path,
+    original_name: str,
+    content_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not source_path.exists():
+        raise FileNotFoundError("Arquivo de origem não encontrado.")
+    safe_name = _sanitize_filename(original_name)
+    stored_name = f"{uuid4().hex}-{safe_name}"
+    dest_dir = _attachment_dir(company_id, area, categoria, slug)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / stored_name
+    shutil.copy2(source_path, dest_path)
+    size_bytes = dest_path.stat().st_size if dest_path.exists() else 0
+
+    meta = _read_meta(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug))
+    attachments = meta.get("attachments") or []
+    entry = {
+        "id": uuid4().hex,
+        "file_name": original_name,
+        "stored_name": stored_name,
+        "content_type": content_type or "",
+        "size_bytes": size_bytes,
+        "uploaded_at": _now(),
+    }
+    attachments.append(entry)
+    meta["attachments"] = attachments
+    _write_meta(_meta_path(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug)), meta)
+    return entry
+
+
+def get_document_attachment(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+    attachment_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    meta = _read_meta(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug))
+    attachments = meta.get("attachments") or []
+    if not attachments:
+        raise FileNotFoundError("Documento sem anexo")
+
+    selected = None
+    if attachment_id:
+        for item in attachments:
+            if isinstance(item, dict) and str(item.get("id")) == str(attachment_id):
+                selected = item
+                break
+    if selected is None:
+        selected = attachments[-1] if isinstance(attachments[-1], dict) else None
+    if not selected:
+        raise FileNotFoundError("Anexo inválido")
+
+    stored_name = str(selected.get("stored_name") or "").strip()
+    if not stored_name:
+        raise FileNotFoundError("Anexo inválido")
+    path = _attachment_dir(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug)) / stored_name
+    if not path.exists():
+        raise FileNotFoundError("Arquivo do anexo não encontrado")
+    return {
+        "path": path,
+        "file_name": selected.get("file_name") or stored_name,
+        "content_type": selected.get("content_type") or "",
+        "id": selected.get("id"),
+    }
+
+
 def delete_document(
     company_id: int,
     area: str,
@@ -744,6 +847,7 @@ async def import_file_to_markdown_path(
     title: Optional[str] = None,
     ai_prompt: Optional[str] = None,
     data_validade: Optional[str] = None,
+    content_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     normalized_path = Path(file_path)
     if not normalized_path.exists():
@@ -758,7 +862,7 @@ async def import_file_to_markdown_path(
         raise ValueError("Formato inválido. Use PDF, DOCX, MD ou TXT.")
 
     doc_title = title or Path(filename or "documento").stem
-    return create_or_update_text_document(
+    doc_payload = create_or_update_text_document(
         company_id=company_id,
         area=area,
         categoria=categoria,
@@ -772,6 +876,20 @@ async def import_file_to_markdown_path(
         base_version=base_version,
         is_published=False,
     )
+    if ext in {".pdf", ".docx"}:
+        try:
+            attach_document_file(
+                company_id=company_id,
+                area=doc_payload.get("area") or (area or DEFAULT_AREA),
+                categoria=doc_payload.get("categoria") or (categoria or DEFAULT_CATEGORIA),
+                slug=doc_payload.get("slug") or (slug or DEFAULT_SLUG),
+                source_path=normalized_path,
+                original_name=filename or "documento",
+                content_type=content_type,
+            )
+        except Exception:
+            logger.exception("Falha ao salvar anexo do documento %s/%s/%s", company_id, area, slug)
+    return doc_payload
 
 
 async def import_file_to_markdown_bytes(
@@ -1059,6 +1177,7 @@ def read_published_documents(
             "tags": meta.get("tags", []),
             "ai_prompt": meta.get("ai_prompt", ""),
             "data_validade": meta.get("data_validade", ""),
+            "attachments": _public_attachments(meta),
             "version": selected_version,
             "published_version_uuid": next(
                 (
@@ -1174,6 +1293,7 @@ def read_published_document_content(
         "tags": meta.get("tags", []),
         "ai_prompt": selected_entry.get("ai_prompt") or meta.get("ai_prompt", ""),
         "data_validade": meta.get("data_validade", ""),
+        "attachments": _public_attachments(meta),
         "versao": selected_version,
         "publicado": bool(selected_entry.get("published")),
         "updated_at": meta.get("updated_at"),

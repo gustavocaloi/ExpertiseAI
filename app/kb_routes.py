@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import UploadFile, File, Form
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import db, services
@@ -556,6 +557,7 @@ async def upload_document(
                     title=title,
                     ai_prompt=ai_prompt,
                     data_validade=data_validade,
+                    content_type=file.content_type,
                 )
                 documento_payload = {**result}
                 if documento_payload.get("title") is not None and documento_payload.get("titulo") is None:
@@ -658,6 +660,8 @@ def list_document_versions(
         meta = services.list_versions(company_id, area, categoria, slug)
         if meta.get("title") is not None and meta.get("titulo") is None:
             meta = {**meta, "titulo": meta.get("title")}
+        if meta.get("attachments") is not None:
+            meta = {**meta, "attachments": services._public_attachments(meta)}
         response = {"documento": meta}
         if include_content:
             content_payload = services.read_published_document_content(
@@ -707,3 +711,24 @@ def get_published_document_content(
         raise HTTPException(status_code=503, detail=f"Recurso temporariamente indisponível: {str(exc)}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/empresas/{company_id}/documentos/{area}/{categoria}/{slug}/anexo", tags=["documentos"])
+def download_document_attachment(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+    attachment_id: Optional[str] = Query(default=None),
+    user: TokenData = Depends(require_company_access),
+):
+    _is_scoped_access_allowed(company_id, user)
+    try:
+        attachment = services.get_document_attachment(company_id, area, categoria, slug, attachment_id)
+        return FileResponse(
+            path=attachment["path"],
+            filename=attachment.get("file_name") or "anexo",
+            media_type=attachment.get("content_type") or "application/octet-stream",
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
