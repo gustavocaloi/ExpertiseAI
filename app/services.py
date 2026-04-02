@@ -1085,9 +1085,22 @@ def read_published_documents(
 
         out.append(item)
 
+    def _validade_key(value: Any, missing_as_max: bool) -> datetime:
+        raw = str(value or "").strip()
+        if not raw:
+            return datetime.max if missing_as_max else datetime.min
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return datetime.max if missing_as_max else datetime.min
+
     sort_option = (sort_by or "").strip()
     if sort_option == "created_asc":
         out = sorted(out, key=lambda item: item["updated_at"] or "")
+    elif sort_option == "validade_asc":
+        out = sorted(out, key=lambda item: _validade_key(item.get("data_validade"), True))
+    elif sort_option == "validade_desc":
+        out = sorted(out, key=lambda item: _validade_key(item.get("data_validade"), False), reverse=True)
     elif sort_option == "area_asc":
         out = sorted(out, key=lambda item: (item["area"] or "", item["categoria"] or "", item["updated_at"] or ""), reverse=False)
     elif sort_option == "categoria_asc":

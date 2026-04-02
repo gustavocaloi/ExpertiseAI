@@ -1117,7 +1117,7 @@ function renderEditHistory(meta) {
       <div class="timeline-main">
         <div class="timeline-main-row">
           <strong>${title}</strong>
-          ${publishedTag ? `<span class="timeline-badge">${publishedTag}</span>` : '<span class="timeline-badge timeline-badge--draft">RASCUNHO</span>'}
+          ${publishedTag ? `<span class="timeline-badge">${publishedTag}</span>` : '<span class="timeline-badge timeline-badge--draft">Rascunho</span>'}
         </div>
         <span class="timeline-meta">${metaLine}</span>
       </div>
@@ -1976,7 +1976,7 @@ async function loadPublishedDocs() {
         ? buildValidityBadge(doc?.data_validade)
         : '';
       const draftBadge = doc?._cardType === 'draft'
-        ? '<span class="status-tag status-tag-draft">RASCUNHO</span>'
+        ? '<span class="status-tag status-tag-draft">Rascunho</span>'
         : '';
       const item = document.createElement('li');
       if (doc._cardType === 'processing') {
