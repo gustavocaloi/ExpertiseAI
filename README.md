@@ -312,6 +312,29 @@ Importante:
 - `GET /api/v1/empresas/{empresa_id}/usuarios` — lista usuários da empresa (admin).
 - `POST /api/v1/empresas/{empresa_id}/usuarios` — cria/vincula usuário com perfil (admin).
 
+### Script de seed (teste)
+
+Para cadastrar áreas, categorias e documentos automaticamente, use:
+
+```bash
+python3 scripts/seed_test_data.py --documents 50 --areas 3 --categories-per-area 4
+```
+
+Com autenticação:
+
+```bash
+python3 scripts/seed_test_data.py --documents 50 --email admin@expertise.ai.local --password Admin@123 --company-id 1
+```
+
+Parâmetros principais:
+
+- `--documents` (obrigatório) — quantidade de documentos a criar.
+- `--areas` — quantidade de áreas (padrão: `3`).
+- `--categories-per-area` — categorias por área (padrão: `3`).
+- `--publish` — publica todos os documentos criados.
+- `--base-url` — URL base da API (padrão: `http://localhost:8000`).
+- `--company-id` — empresa alvo (padrão: `1`).
+
 ### Exemplo de autenticação
 
 ```bash
