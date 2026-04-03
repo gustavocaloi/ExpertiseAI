@@ -129,6 +129,7 @@ const pagination = {
   limit: 10,
   total: 0,
 };
+let docsSearchDebounceTimer = null;
 
 function docTitleOf(doc) {
   return doc?.titulo || doc?.title || '';
@@ -1318,6 +1319,7 @@ async function publishVersionFromToggle(version) {
       versionPublishToggle.disabled = false;
     }
     const docMeta = {
+      document_uuid: editingDocumentContext.document_uuid || '',
       area: editingDocumentContext.area,
       categoria: editingDocumentContext.categoria,
       slug: editingDocumentContext.slug,
@@ -1349,6 +1351,7 @@ async function loadDocumentHistory(document, forceReload = false) {
     editHistoryHint.textContent = `Carregando histórico de "${document.slug}".`;
   }
   editingDocumentContext = {
+    document_uuid: document.document_uuid || '',
     area: document.area,
     categoria: document.categoria,
     slug: document.slug,
@@ -1434,6 +1437,9 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
       if (payload?.ai_prompt) {
         selectedDocument = { ...selectedDocument, ai_prompt: payload.ai_prompt };
       }
+      if (payload?.document_uuid) {
+        selectedDocument = { ...selectedDocument, document_uuid: payload.document_uuid };
+      }
     })
     .catch((error) => {
       docModalContent.textContent = error.message;
@@ -1453,6 +1459,7 @@ function getPublishContext() {
   }
   if (selectedDocument && selectedDocument.area && selectedDocument.categoria && selectedDocument.slug) {
     return {
+      document_uuid: selectedDocument.document_uuid || '',
       area: selectedDocument.area,
       categoria: selectedDocument.categoria,
       slug: selectedDocument.slug,
@@ -1487,6 +1494,7 @@ async function publishVersionFromContext(version) {
   const hasHistoryCtx = Boolean(editingDocumentContext);
   if (hasHistoryCtx && context.area && context.categoria && context.slug) {
     await loadDocumentHistory({
+      document_uuid: context.document_uuid || '',
       area: context.area,
       categoria: context.categoria,
       slug: context.slug,
@@ -1565,6 +1573,7 @@ function openCreateForSelectedDocument() {
         selectedDocument = { ...selectedDocument, version: selectedVersion };
       }
       loadDocumentHistory({
+        document_uuid: payload?.document_uuid || selectedDocument.document_uuid || '',
         area: payload?.area || selectedDocument.area || '',
         categoria: payload?.categoria || selectedDocument.categoria || '',
         slug: payload?.slug || selectedDocument.slug || '',
@@ -1575,6 +1584,7 @@ function openCreateForSelectedDocument() {
     .catch((error) => {
       showToast(error.message, 'error');
       loadDocumentHistory({
+        document_uuid: selectedDocument.document_uuid || '',
         area: selectedDocument.area || '',
         categoria: selectedDocument.categoria || '',
         slug: selectedDocument.slug || '',
@@ -2024,7 +2034,7 @@ async function loadPublishedDocs() {
   if (categoria) query.set('categoria', categoria);
   if (tag) query.set('tag', tag);
   if (busca) query.set('busca', busca);
-  query.set('include_content', busca ? 'true' : 'false');
+  query.set('include_content', 'false');
   query.set('include_unpublished', 'true');
   query.set('limit', String(clampedLimit));
   query.set('offset', String(offset));
@@ -2297,6 +2307,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
   }
 
   const context = {
+    document_uuid: selectedDocument?.document_uuid || editingDocumentContext?.document_uuid || null,
     area: normalizedArea,
     categoria: normalizedCategoria,
     slug,
@@ -2316,6 +2327,9 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
       const form = new FormData();
       form.set('area', normalizedArea);
       form.set('categoria', normalizedCategoria);
+      if (context.document_uuid) {
+        form.set('document_uuid', context.document_uuid);
+      }
       if (slug) {
         form.set('slug', slug);
       }
@@ -2362,6 +2376,7 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
       uploadedVersion = uploadedDoc?.version;
     } else {
       const payload = {
+        document_uuid: context.document_uuid,
         area: normalizedArea,
         categoria: normalizedCategoria,
         slug: slug || null,
@@ -2385,9 +2400,14 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
     const resolvedArea = uploadedDoc?.area || context.area;
     const resolvedCategoria = uploadedDoc?.categoria || context.categoria;
     const resolvedSlug = uploadedDoc?.slug || context.slug;
+    const resolvedDocumentUuid = uploadedDoc?.document_uuid || context.document_uuid || null;
+    context.document_uuid = resolvedDocumentUuid;
     context.area = resolvedArea;
     context.categoria = resolvedCategoria;
     context.slug = resolvedSlug;
+    if (resolvedDocumentUuid) {
+      selectedDocument = { ...(selectedDocument || {}), ...uploadedDoc, document_uuid: resolvedDocumentUuid };
+    }
     if (docArea) setFormSelectValue(docArea, resolvedArea);
     if (docCategoria) setFormSelectValue(docCategoria, resolvedCategoria);
     if (docSlug) docSlug.value = resolvedSlug || '';
@@ -2415,9 +2435,14 @@ document.getElementById('createDocForm').addEventListener('submit', async (event
     if (uploadedVersion) {
       updateImportProgress(95, 'Finalizando...');
       if (editingDocumentContext &&
-        editingDocumentContext.area === context.area &&
-        editingDocumentContext.categoria === context.categoria &&
-        editingDocumentContext.slug === context.slug) {
+        (
+          (editingDocumentContext.document_uuid && context.document_uuid && editingDocumentContext.document_uuid === context.document_uuid)
+          || (
+            editingDocumentContext.area === context.area &&
+            editingDocumentContext.categoria === context.categoria &&
+            editingDocumentContext.slug === context.slug
+          )
+        )) {
         editingDocumentKey = null;
         await loadDocumentHistory(context, true);
       } else {
@@ -2659,7 +2684,13 @@ function resetPaginationAndLoadPublishedDocs() {
 filterArea?.addEventListener('change', resetPaginationAndLoadPublishedDocs);
 filterCategoria?.addEventListener('change', resetPaginationAndLoadPublishedDocs);
 document.getElementById('filterTag').addEventListener('change', resetPaginationAndLoadPublishedDocs);
-document.getElementById('filterBusca').addEventListener('change', resetPaginationAndLoadPublishedDocs);
+document.getElementById('filterBusca').addEventListener('input', () => {
+  pagination.page = 1;
+  window.clearTimeout(docsSearchDebounceTimer);
+  docsSearchDebounceTimer = window.setTimeout(() => {
+    void loadPublishedDocs();
+  }, 250);
+});
 document.getElementById('sortDocs').addEventListener('change', resetPaginationAndLoadPublishedDocs);
 docsPrevButton?.addEventListener('click', () => {
   if (pagination.page <= 1) {

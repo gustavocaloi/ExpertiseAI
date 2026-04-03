@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentCreatePayload(BaseModel):
+    document_uuid: Optional[str] = None
     area: Optional[str] = None
     categoria: Optional[str] = None
     slug: Optional[str] = None
@@ -341,6 +342,7 @@ def create_document(
             area=payload.area,
             categoria=payload.categoria,
             slug=payload.slug,
+            document_uuid=payload.document_uuid,
             title=payload.title,
             content=payload.content,
             author_email=_author_email(user),
@@ -493,6 +495,7 @@ def delete_company_category(
 @router.post("/empresas/{company_id}/documentos/upload", tags=["upload"])
 async def upload_document(
     company_id: int,
+    document_uuid: Optional[str] = Form(default=None),
     area: Optional[str] = Form(default=None),
     categoria: Optional[str] = Form(default=None),
     slug: Optional[str] = Form(default=None),
@@ -528,6 +531,7 @@ async def upload_document(
             "job_id": job_id,
             "status": "processing",
             "empresa_id": company_id,
+            "document_uuid": document_uuid,
             "slug": slug,
             "area": area,
             "categoria": categoria,
@@ -549,6 +553,7 @@ async def upload_document(
                     area=area,
                     categoria=categoria,
                     slug=slug,
+                    document_uuid=document_uuid,
                     base_version=base_version,
                     file_path=upload_path,
                     filename=file_name,

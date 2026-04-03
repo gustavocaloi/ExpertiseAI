@@ -95,30 +95,68 @@ def _now() -> str:
 DEFAULT_AREA = "sem-area"
 DEFAULT_CATEGORIA = "sem-categoria"
 DEFAULT_SLUG = "documento"
+DOCUMENT_STORAGE_VERSION = 2
+DOCUMENTS_DIRNAME = "_documents"
+DOCUMENTS_INDEX_FILENAME = "_documents.index.json"
+_MIGRATED_COMPANIES: set[int] = set()
 
 
-def _doc_dir(company_id: int, area: str, categoria: str, slug: str) -> Path:
+def _company_root(company_id: int) -> Path:
+    return Path(KB_ROOT) / str(company_id)
+
+
+def _documents_root(company_id: int) -> Path:
+    return _company_root(company_id) / DOCUMENTS_DIRNAME
+
+
+def _documents_index_path(company_id: int) -> Path:
+    return _company_root(company_id) / DOCUMENTS_INDEX_FILENAME
+
+
+def _legacy_doc_dir(company_id: int, area: str, categoria: str, slug: str) -> Path:
     return Path(KB_ROOT) / str(company_id) / _sanitize(area) / _sanitize(categoria) / _sanitize(slug)
 
 
-def _meta_path(company_id: int, area: str, categoria: str, slug: str) -> Path:
-    return _doc_dir(company_id, area, categoria, slug) / "document.meta.json"
+def _doc_dir(company_id: int, area: str, categoria: str, slug: str, document_uuid: Optional[str] = None) -> Path:
+    if document_uuid:
+        return _documents_root(company_id) / str(document_uuid).strip()
+    return _legacy_doc_dir(company_id, area, categoria, slug)
 
 
-def _version_path(company_id: int, area: str, categoria: str, slug: str, version: str) -> Path:
-    return _doc_dir(company_id, area, categoria, slug) / f"v{version}.md"
+def _meta_path(company_id: int, area: str, categoria: str, slug: str, document_uuid: Optional[str] = None) -> Path:
+    return _doc_dir(company_id, area, categoria, slug, document_uuid=document_uuid) / "document.meta.json"
 
 
-def _read_meta(company_id: int, area: str, categoria: str, slug: str) -> Dict[str, Any]:
-    meta_file = _meta_path(company_id, area, categoria, slug)
-    if not meta_file.exists():
-        raise FileNotFoundError("Documento não encontrado")
+def _version_path(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+    version: str,
+    document_uuid: Optional[str] = None,
+) -> Path:
+    return _doc_dir(company_id, area, categoria, slug, document_uuid=document_uuid) / f"v{version}.md"
+
+
+def _is_new_storage_meta_path(company_id: int, meta_file: Path) -> bool:
+    try:
+        relative = meta_file.relative_to(_company_root(company_id))
+    except ValueError:
+        return False
+    parts = relative.parts
+    return len(parts) >= 3 and parts[0] == DOCUMENTS_DIRNAME and parts[-1] == "document.meta.json"
+
+
+def _load_meta_file(meta_file: Path) -> Dict[str, Any]:
     with meta_file.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     changed = False
     document_uuid = str(payload.get("document_uuid") or "").strip()
     if not document_uuid:
         payload["document_uuid"] = str(uuid4())
+        changed = True
+    if int(payload.get("storage_version") or 0) != DOCUMENT_STORAGE_VERSION:
+        payload["storage_version"] = DOCUMENT_STORAGE_VERSION
         changed = True
     versions = payload.get("versions", [])
     if isinstance(versions, list):
@@ -134,10 +172,344 @@ def _read_meta(company_id: int, area: str, categoria: str, slug: str) -> Dict[st
     return payload
 
 
+def _read_meta_by_path(company_id: int, meta_file: Path, migrate: bool = True) -> Dict[str, Any]:
+    payload = _load_meta_file(meta_file)
+    if migrate:
+        meta_file = _migrate_document_to_company_storage(company_id, meta_file, payload)
+        payload = _load_meta_file(meta_file)
+    return payload
+
+
+def _iter_document_meta_files(company_id: int) -> Iterable[Path]:
+    root = _company_root(company_id)
+    if not root.exists():
+        return []
+    seen: set[Path] = set()
+    items: list[Path] = []
+    for meta_file in root.rglob("document.meta.json"):
+        if not meta_file.is_file():
+            continue
+        if meta_file in seen:
+            continue
+        seen.add(meta_file)
+        items.append(meta_file)
+    return items
+
+
+def _find_meta_file_by_document_uuid(company_id: int, document_uuid: str) -> Optional[Path]:
+    document_uuid_value = str(document_uuid or "").strip()
+    if not document_uuid_value:
+        return None
+    candidate = _meta_path(company_id, "", "", "", document_uuid=document_uuid_value)
+    if candidate.exists():
+        return candidate
+    for item in _read_documents_index(company_id):
+        if str(item.get("document_uuid") or "").strip() == document_uuid_value:
+            indexed_candidate = _meta_path(company_id, "", "", "", document_uuid=document_uuid_value)
+            if indexed_candidate.exists():
+                return indexed_candidate
+    for meta_file in _iter_document_meta_files(company_id):
+        try:
+            payload = _load_meta_file(meta_file)
+        except Exception:
+            continue
+        if str(payload.get("document_uuid") or "").strip() == document_uuid_value:
+            return meta_file
+    return None
+
+
+def _find_meta_file_by_identity(
+    company_id: int,
+    area: Optional[str],
+    categoria: Optional[str],
+    slug: Optional[str],
+) -> Optional[Path]:
+    area_n = _sanitize(area or DEFAULT_AREA)
+    categoria_n = _sanitize(categoria or DEFAULT_CATEGORIA)
+    slug_n = _sanitize(slug or DEFAULT_SLUG)
+    legacy_meta = _meta_path(company_id, area_n, categoria_n, slug_n)
+    if legacy_meta.exists():
+        return legacy_meta
+    for item in _read_documents_index(company_id):
+        if _sanitize(item.get("area") or DEFAULT_AREA) != area_n:
+            continue
+        if _sanitize(item.get("categoria") or DEFAULT_CATEGORIA) != categoria_n:
+            continue
+        if _sanitize(item.get("slug") or DEFAULT_SLUG) != slug_n:
+            continue
+        document_uuid = str(item.get("document_uuid") or "").strip()
+        if document_uuid:
+            candidate = _meta_path(company_id, "", "", "", document_uuid=document_uuid)
+            if candidate.exists():
+                return candidate
+    for meta_file in _iter_document_meta_files(company_id):
+        try:
+            payload = _load_meta_file(meta_file)
+        except Exception:
+            continue
+        if _sanitize(payload.get("area") or DEFAULT_AREA) != area_n:
+            continue
+        if _sanitize(payload.get("categoria") or DEFAULT_CATEGORIA) != categoria_n:
+            continue
+        if _sanitize(payload.get("slug") or DEFAULT_SLUG) != slug_n:
+            continue
+        return meta_file
+    return None
+
+
+def _find_document_meta_file(
+    company_id: int,
+    area: Optional[str] = None,
+    categoria: Optional[str] = None,
+    slug: Optional[str] = None,
+    document_uuid: Optional[str] = None,
+) -> Optional[Path]:
+    if document_uuid:
+        by_uuid = _find_meta_file_by_document_uuid(company_id, document_uuid)
+        if by_uuid is not None:
+            return by_uuid
+    return _find_meta_file_by_identity(company_id, area, categoria, slug)
+
+
+def _assert_unique_document_identity(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+    *,
+    ignore_document_uuid: Optional[str] = None,
+) -> None:
+    normalized_area = _sanitize(area or DEFAULT_AREA)
+    normalized_categoria = _sanitize(categoria or DEFAULT_CATEGORIA)
+    normalized_slug = _sanitize(slug or DEFAULT_SLUG)
+    matched = _find_meta_file_by_identity(company_id, normalized_area, normalized_categoria, normalized_slug)
+    if matched is None:
+        return
+    payload = _read_meta_by_path(company_id, matched)
+    if ignore_document_uuid and str(payload.get("document_uuid")) == str(ignore_document_uuid):
+        return
+    raise ValueError("Já existe um documento com a mesma empresa, área, categoria e slug.")
+
+
+def _migrate_document_to_company_storage(company_id: int, meta_file: Path, payload: Optional[Dict[str, Any]] = None) -> Path:
+    if _is_new_storage_meta_path(company_id, meta_file):
+        return meta_file
+
+    data = payload or _load_meta_file(meta_file)
+    document_uuid = str(data.get("document_uuid") or "").strip()
+    if not document_uuid:
+        document_uuid = str(uuid4())
+        data["document_uuid"] = document_uuid
+
+    source_dir = meta_file.parent
+    target_dir = _doc_dir(company_id, "", "", "", document_uuid=document_uuid)
+    target_meta = target_dir / "document.meta.json"
+    if source_dir == target_dir:
+        _write_meta(target_meta, data)
+        return target_meta
+
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    if not target_dir.exists():
+        shutil.move(str(source_dir), str(target_dir))
+        _write_meta(target_meta, data)
+        return target_meta
+
+    for child in source_dir.iterdir():
+        destination = target_dir / child.name
+        if destination.exists():
+            if child.is_dir():
+                shutil.copytree(child, destination, dirs_exist_ok=True)
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                if child.name == "document.meta.json":
+                    child.unlink(missing_ok=True)
+                    continue
+                source_bytes = child.read_bytes()
+                destination_bytes = destination.read_bytes()
+                if source_bytes != destination_bytes:
+                    raise ValueError(
+                        f"Conflito ao migrar documento {document_uuid}: arquivo {child.name} já existe com conteúdo diferente."
+                    )
+                child.unlink(missing_ok=True)
+        else:
+            shutil.move(str(child), str(destination))
+
+    shutil.rmtree(source_dir, ignore_errors=True)
+    _write_meta(target_meta, data)
+    return target_meta
+
+
+def _cleanup_empty_legacy_directories(company_id: int) -> int:
+    company_root = _company_root(company_id)
+    if not company_root.exists():
+        return 0
+
+    removed = 0
+    candidate_dirs = sorted(
+        [
+            path
+            for path in company_root.rglob("*")
+            if path.is_dir() and DOCUMENTS_DIRNAME not in path.parts
+        ],
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in candidate_dirs:
+        if directory == company_root:
+            continue
+        try:
+            next(directory.iterdir())
+            continue
+        except StopIteration:
+            directory.rmdir()
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+    return removed
+
+
+def _read_meta(company_id: int, area: str, categoria: str, slug: str) -> Dict[str, Any]:
+    meta_file = _find_document_meta_file(company_id, area=area, categoria=categoria, slug=slug)
+    if meta_file is None or not meta_file.exists():
+        raise FileNotFoundError("Documento não encontrado")
+    return _read_meta_by_path(company_id, meta_file)
+
+
 def _write_meta(meta_file: Path, payload: Dict[str, Any]) -> None:
     meta_file.parent.mkdir(parents=True, exist_ok=True)
     with meta_file.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+    try:
+        company_id = int(payload.get("empresa_id"))
+    except (TypeError, ValueError):
+        company_id = None
+    if company_id is not None:
+        _upsert_documents_index_entry(company_id, payload)
+
+
+def _meta_to_index_entry(meta: Dict[str, Any]) -> Dict[str, Any]:
+    published_version = str(meta.get("published_version", "") or "")
+    versions = [
+        entry
+        for entry in meta.get("versions", [])
+        if isinstance(entry, dict) and entry.get("version") is not None
+    ]
+    selected_version = published_version
+    if not selected_version and versions:
+        versions = sorted(versions, key=lambda item: _version_key(item["version"]))
+        selected_version = str(versions[-1]["version"])
+    version_uuid = next(
+        (
+            entry.get("version_uuid")
+            for entry in versions
+            if _version_matches(entry.get("version"), selected_version)
+        ),
+        None,
+    )
+    return {
+        "document_uuid": meta.get("document_uuid"),
+        "empresa_id": meta.get("empresa_id"),
+        "slug": meta.get("slug"),
+        "titulo": meta.get("title"),
+        "area": meta.get("area"),
+        "categoria": meta.get("categoria"),
+        "tags": meta.get("tags", []),
+        "ai_prompt": meta.get("ai_prompt", ""),
+        "data_validade": meta.get("data_validade", ""),
+        "attachments": _public_attachments(meta),
+        "version": selected_version,
+        "published_version_uuid": version_uuid,
+        "published_version": published_version,
+        "satellite_document_id": meta.get("document_uuid"),
+        "satellite_version_id": version_uuid,
+        "created_at": meta.get("created_at"),
+        "updated_at": meta.get("updated_at"),
+        "searchable_text": _searchable_text_from_meta(meta),
+    }
+
+
+def _read_documents_index(company_id: int) -> list[Dict[str, Any]]:
+    path = _documents_index_path(company_id)
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    return items if isinstance(items, list) else []
+
+
+def _write_documents_index(company_id: int, items: list[Dict[str, Any]]) -> None:
+    path = _documents_index_path(company_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "company_id": company_id,
+        "updated_at": _now(),
+        "items": items,
+    }
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _rebuild_documents_index(company_id: int) -> list[Dict[str, Any]]:
+    items: list[Dict[str, Any]] = []
+    for meta_file in _iter_document_meta_files(company_id):
+        try:
+            meta = _read_meta_by_path(company_id, meta_file)
+        except Exception:
+            continue
+        items.append(_meta_to_index_entry(meta))
+    _write_documents_index(company_id, items)
+    return items
+
+
+def _ensure_documents_index(company_id: int) -> list[Dict[str, Any]]:
+    items = _read_documents_index(company_id)
+    if items and all(isinstance(item, dict) and "searchable_text" in item for item in items):
+        return items
+    return _rebuild_documents_index(company_id)
+
+
+def _upsert_documents_index_entry(company_id: int, meta: Dict[str, Any]) -> None:
+    document_uuid = str(meta.get("document_uuid") or "").strip()
+    if not document_uuid:
+        return
+    items = _read_documents_index(company_id)
+    if not items:
+        _rebuild_documents_index(company_id)
+        items = _read_documents_index(company_id)
+    entry = _meta_to_index_entry(meta)
+    replaced = False
+    for index, current in enumerate(items):
+        if str(current.get("document_uuid") or "").strip() == document_uuid:
+            items[index] = entry
+            replaced = True
+            break
+    if not replaced:
+        items.append(entry)
+    _write_documents_index(company_id, items)
+
+
+def _remove_documents_index_entry(company_id: int, document_uuid: Optional[str]) -> None:
+    document_uuid_value = str(document_uuid or "").strip()
+    if not document_uuid_value:
+        return
+    items = _read_documents_index(company_id)
+    if not items:
+        return
+    filtered = [
+        item
+        for item in items
+        if str(item.get("document_uuid") or "").strip() != document_uuid_value
+    ]
+    if len(filtered) != len(items):
+        _write_documents_index(company_id, filtered)
 
 
 def _docling_worker_env() -> dict[str, str]:
@@ -313,6 +685,10 @@ def _safe_tags(value: Any) -> list[str]:
     return tags
 
 
+def _normalize_tag_filter(value: Optional[str]) -> str:
+    return str(value or "").strip().lower()
+
+
 def _validate_document_title(title: str) -> None:
     if len((title or "").strip()) > _DOCUMENT_TITLE_MAX_CHARS:
         raise ValueError(f"O título deve ter no máximo {_DOCUMENT_TITLE_MAX_CHARS} caracteres.")
@@ -338,6 +714,53 @@ def _read_text_with_retry(
     return None
 
 
+def _strip_frontmatter(markdown: str) -> str:
+    lines = markdown.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return markdown
+    closing = None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            closing = index
+            break
+    if closing is None:
+        return markdown
+    return "\n".join(lines[closing + 1 :]).lstrip("\n")
+
+
+def _searchable_text_from_meta(meta: Dict[str, Any]) -> str:
+    parts = [
+        str(meta.get("title") or ""),
+        str(meta.get("slug") or ""),
+        str(meta.get("area") or ""),
+        str(meta.get("categoria") or ""),
+        " ".join(_safe_tags(meta.get("tags", []))),
+    ]
+    selected_version = str(meta.get("published_version") or "").strip()
+    if not selected_version:
+        versions = [
+            entry
+            for entry in meta.get("versions", [])
+            if isinstance(entry, dict) and entry.get("version") is not None
+        ]
+        if versions:
+            versions = sorted(versions, key=lambda item: _version_key(item["version"]))
+            selected_version = str(versions[-1]["version"])
+    if selected_version:
+        version_path = _version_path(
+            int(meta.get("empresa_id")),
+            str(meta.get("area") or ""),
+            str(meta.get("categoria") or ""),
+            str(meta.get("slug") or ""),
+            selected_version,
+            document_uuid=str(meta.get("document_uuid") or ""),
+        )
+        content = _read_text_with_retry(version_path, encoding="utf-8", errors="ignore") if version_path.exists() else ""
+        if content:
+            parts.append(_strip_frontmatter(content))
+    return " ".join(part for part in parts if part).lower()
+
+
 def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]:
     root = Path(KB_ROOT)
     if not root.exists():
@@ -350,7 +773,10 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
             "companies_created": 0,
             "companies_seen": 0,
             "taxonomies_created": 0,
+            "migrated": 0,
         }
+
+    migrated = migrate_documents_storage_layout()
 
     companies_seen: set[int] = set()
     summary = {
@@ -362,11 +788,40 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
         "companies_created": 0,
         "companies_seen": 0,
         "taxonomies_created": 0,
+        "migrated": migrated,
     }
 
     for version_file in root.rglob("v*.md"):
         if "_tmp_uploads" in version_file.parts:
             continue
+        meta_seed: Dict[str, Any] = {}
+        if DOCUMENTS_DIRNAME in version_file.parts:
+            if len(version_file.relative_to(root).parts) < 4:
+                continue
+            company_id_str = version_file.relative_to(root).parts[0]
+            if not company_id_str.isdigit():
+                continue
+            company_id = int(company_id_str)
+            doc_dir = version_file.parent
+            meta_path = doc_dir / "document.meta.json"
+            if not meta_path.exists():
+                continue
+            meta_seed = _load_meta_file(meta_path)
+            area = _sanitize(meta_seed.get("area") or DEFAULT_AREA)
+            categoria = _sanitize(meta_seed.get("categoria") or DEFAULT_CATEGORIA)
+            slug = _sanitize(meta_seed.get("slug") or DEFAULT_SLUG)
+        else:
+            relative = version_file.relative_to(root)
+            if len(relative.parts) < 5:
+                continue
+
+            company_id_str, area, categoria, slug = relative.parts[:4]
+            if not company_id_str.isdigit():
+                continue
+
+            company_id = int(company_id_str)
+            doc_dir = version_file.parent
+            meta_path = doc_dir / "document.meta.json"
 
         if not version_file.is_file():
             continue
@@ -374,18 +829,6 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
         match = _VERSION_FILE_RE.match(version_file.name)
         if not match:
             continue
-
-        relative = version_file.relative_to(root)
-        if len(relative.parts) < 5:
-            continue
-
-        company_id_str, area, categoria, slug = relative.parts[:4]
-        if not company_id_str.isdigit():
-            continue
-
-        company_id = int(company_id_str)
-        doc_dir = version_file.parent
-        meta_path = doc_dir / "document.meta.json"
 
         if meta_path.exists() and not force:
             summary["skipped"] += 1
@@ -465,7 +908,8 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
             data_validade = _safe_str(first_metadata.get("data_validade"))
 
             meta = {
-                "document_uuid": str(uuid4()),
+                "document_uuid": str(meta_seed.get("document_uuid")) if meta_seed.get("document_uuid") else str(uuid4()),
+                "storage_version": DOCUMENT_STORAGE_VERSION,
                 "slug": slug,
                 "title": _safe_str(first_metadata.get("title")) or _safe_str(first_version.get("title")) or slug,
                 "empresa_id": company_id,
@@ -493,7 +937,8 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
             }
 
             was_missing = not meta_path.exists()
-            _write_meta(meta_path, meta)
+            target_meta_path = _migrate_document_to_company_storage(company_id, meta_path, meta)
+            _write_meta(target_meta_path, meta)
             summary["scanned"] += 1
             if was_missing:
                 summary["created"] += 1
@@ -517,6 +962,43 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
     return summary
 
 
+def migrate_documents_storage_layout(company_id: Optional[int] = None) -> int:
+    root = Path(KB_ROOT)
+    if not root.exists():
+        return 0
+
+    migrated = 0
+    company_ids: list[int] = []
+    if company_id is not None:
+        company_ids = [company_id]
+    else:
+        for child in root.iterdir():
+            if child.is_dir() and child.name.isdigit():
+                company_ids.append(int(child.name))
+
+    for current_company_id in company_ids:
+        if company_id is not None and current_company_id in _MIGRATED_COMPANIES:
+            continue
+        for meta_file in list(_iter_document_meta_files(current_company_id)):
+            if _is_new_storage_meta_path(current_company_id, meta_file):
+                _read_meta_by_path(current_company_id, meta_file, migrate=False)
+                continue
+            try:
+                payload = _load_meta_file(meta_file)
+                _migrate_document_to_company_storage(current_company_id, meta_file, payload)
+                migrated += 1
+            except Exception:
+                logger.exception(
+                    "Falha ao migrar documento legado para o novo layout. empresa=%s meta=%s",
+                    current_company_id,
+                    meta_file,
+                )
+        _cleanup_empty_legacy_directories(current_company_id)
+        _rebuild_documents_index(current_company_id)
+        _MIGRATED_COMPANIES.add(current_company_id)
+    return migrated
+
+
 def _version_matches(a: Any, b: Any) -> bool:
     try:
         return _version_key(a) == _version_key(b)
@@ -532,8 +1014,14 @@ def _sanitize_filename(name: str) -> str:
     return safe or "anexo"
 
 
-def _attachment_dir(company_id: int, area: str, categoria: str, slug: str) -> Path:
-    return _doc_dir(company_id, area, categoria, slug) / "attachments"
+def _attachment_dir(
+    company_id: int,
+    area: str,
+    categoria: str,
+    slug: str,
+    document_uuid: Optional[str] = None,
+) -> Path:
+    return _doc_dir(company_id, area, categoria, slug, document_uuid=document_uuid) / "attachments"
 
 
 def _public_attachments(meta: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -580,6 +1068,7 @@ def create_or_update_text_document(
     area: Optional[str],
     categoria: Optional[str],
     slug: Optional[str],
+    document_uuid: Optional[str],
     title: str,
     content: str,
     author_email: str,
@@ -597,13 +1086,21 @@ def create_or_update_text_document(
     else:
         slug_value = slug
     slug_n = _normalize_slug(slug_value, DEFAULT_SLUG)
-    doc_dir = _doc_dir(company_id, area_n, categoria_n, slug_n)
-    meta_path = _meta_path(company_id, area_n, categoria_n, slug_n)
+    existing_meta_path = _find_document_meta_file(
+        company_id,
+        area=area_n,
+        categoria=categoria_n,
+        slug=slug_n,
+        document_uuid=document_uuid,
+    )
 
     data_validade_value = (data_validade or "").strip()
-    if not meta_path.exists():
+    if existing_meta_path is None:
+        _assert_unique_document_identity(company_id, area_n, categoria_n, slug_n)
+        document_uuid_value = str(document_uuid or uuid4())
         meta = {
-            "document_uuid": str(uuid4()),
+            "document_uuid": document_uuid_value,
+            "storage_version": DOCUMENT_STORAGE_VERSION,
             "slug": slug_n,
             "title": title,
             "empresa_id": company_id,
@@ -619,7 +1116,18 @@ def create_or_update_text_document(
             "attachments": [],
         }
     else:
-        meta = _read_meta(company_id, area_n, categoria_n, slug_n)
+        meta = _read_meta_by_path(company_id, existing_meta_path)
+        document_uuid_value = str(meta.get("document_uuid"))
+        _assert_unique_document_identity(
+            company_id,
+            area_n,
+            categoria_n,
+            slug_n,
+            ignore_document_uuid=document_uuid_value,
+        )
+        meta["area"] = area_n
+        meta["categoria"] = categoria_n
+        meta["slug"] = slug_n
         if title:
             meta["title"] = title
         if ai_prompt is not None:
@@ -658,7 +1166,7 @@ def create_or_update_text_document(
             v["published_at"] = None
         meta["published_version"] = version
 
-    path = _version_path(company_id, area_n, categoria_n, slug_n, version)
+    path = _version_path(company_id, area_n, categoria_n, slug_n, version, document_uuid=document_uuid_value)
     doc_payload = _frontmatter(
         content,
         {
@@ -687,7 +1195,7 @@ def create_or_update_text_document(
     meta["versions"].append(version_meta)
     if is_published:
         meta["published_version"] = version
-    _write_meta(meta_path, meta)
+    _write_meta(_meta_path(company_id, area_n, categoria_n, slug_n, document_uuid=document_uuid_value), meta)
 
     return {
         "document_uuid": meta.get("document_uuid"),
@@ -701,6 +1209,7 @@ def create_or_update_text_document(
         "version": _version_display(version),
         "published_version": meta.get("published_version", ""),
         "path": str(path),
+        "title": meta.get("title"),
     }
 
 
@@ -715,15 +1224,21 @@ def attach_document_file(
 ) -> Dict[str, Any]:
     if not source_path.exists():
         raise FileNotFoundError("Arquivo de origem não encontrado.")
+    meta = _read_meta(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug))
     safe_name = _sanitize_filename(original_name)
     stored_name = f"{uuid4().hex}-{safe_name}"
-    dest_dir = _attachment_dir(company_id, area, categoria, slug)
+    dest_dir = _attachment_dir(
+        company_id,
+        area,
+        categoria,
+        slug,
+        document_uuid=str(meta.get("document_uuid")),
+    )
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / stored_name
     shutil.copy2(source_path, dest_path)
     size_bytes = dest_path.stat().st_size if dest_path.exists() else 0
 
-    meta = _read_meta(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug))
     attachments = meta.get("attachments") or []
     entry = {
         "id": uuid4().hex,
@@ -735,7 +1250,16 @@ def attach_document_file(
     }
     attachments.append(entry)
     meta["attachments"] = attachments
-    _write_meta(_meta_path(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug)), meta)
+    _write_meta(
+        _meta_path(
+            company_id,
+            _sanitize(area),
+            _sanitize(categoria),
+            _sanitize(slug),
+            document_uuid=str(meta.get("document_uuid")),
+        ),
+        meta,
+    )
     return entry
 
 
@@ -765,7 +1289,13 @@ def get_document_attachment(
     stored_name = str(selected.get("stored_name") or "").strip()
     if not stored_name:
         raise FileNotFoundError("Anexo inválido")
-    path = _attachment_dir(company_id, _sanitize(area), _sanitize(categoria), _sanitize(slug)) / stored_name
+    path = _attachment_dir(
+        company_id,
+        _sanitize(area),
+        _sanitize(categoria),
+        _sanitize(slug),
+        document_uuid=str(meta.get("document_uuid")),
+    ) / stored_name
     if not path.exists():
         raise FileNotFoundError("Arquivo do anexo não encontrado")
     return {
@@ -785,10 +1315,12 @@ def delete_document(
     area_n = _sanitize(area)
     categoria_n = _sanitize(categoria)
     slug_n = _sanitize(slug)
-    doc_dir = _doc_dir(company_id, area_n, categoria_n, slug_n)
+    meta = _read_meta(company_id, area_n, categoria_n, slug_n)
+    doc_dir = _doc_dir(company_id, area_n, categoria_n, slug_n, document_uuid=str(meta.get("document_uuid")))
     if not doc_dir.exists():
         raise FileNotFoundError("Documento não encontrado")
     shutil.rmtree(doc_dir)
+    _remove_documents_index_entry(company_id, meta.get("document_uuid"))
     logger.info(
         "Documento removido: empresa=%s area=%s categoria=%s slug=%s",
         company_id,
@@ -801,6 +1333,7 @@ def delete_document(
         "area": area_n,
         "categoria": categoria_n,
         "slug": slug_n,
+        "document_uuid": meta.get("document_uuid"),
     }
 
 
@@ -809,6 +1342,7 @@ async def import_file_to_markdown(
     area: Optional[str],
     categoria: Optional[str],
     slug: Optional[str],
+    document_uuid: Optional[str],
     base_version: Optional[str],
     file: UploadFile,
     author_email: str,
@@ -823,6 +1357,7 @@ async def import_file_to_markdown(
         area=area,
         categoria=categoria,
         slug=slug,
+        document_uuid=document_uuid,
         base_version=base_version,
         raw=raw,
         filename=file.filename or "documento",
@@ -839,6 +1374,7 @@ async def import_file_to_markdown_path(
     area: Optional[str],
     categoria: Optional[str],
     slug: Optional[str],
+    document_uuid: Optional[str],
     base_version: Optional[str],
     file_path: str | Path,
     filename: str,
@@ -867,6 +1403,7 @@ async def import_file_to_markdown_path(
         area=area,
         categoria=categoria,
         slug=slug,
+        document_uuid=document_uuid,
         title=doc_title,
         content=converted,
         author_email=author_email,
@@ -897,6 +1434,7 @@ async def import_file_to_markdown_bytes(
     area: Optional[str],
     categoria: Optional[str],
     slug: Optional[str],
+    document_uuid: Optional[str],
     base_version: Optional[str],
     raw: bytes,
     filename: str,
@@ -924,6 +1462,7 @@ async def import_file_to_markdown_bytes(
         area=area,
         categoria=categoria,
         slug=slug,
+        document_uuid=document_uuid,
         title=doc_title,
         content=converted,
         author_email=author_email,
@@ -1051,7 +1590,10 @@ def set_published_version(
             v["published_at"] = None
 
     meta["published_version"] = version
-    _write_meta(_meta_path(company_id, area_n, categoria_n, slug_n), meta)
+    _write_meta(
+        _meta_path(company_id, area_n, categoria_n, slug_n, document_uuid=str(meta.get("document_uuid"))),
+        meta,
+    )
 
     return {
         "document_uuid": meta.get("document_uuid"),
@@ -1083,126 +1625,54 @@ def read_published_documents(
     sort_by: str = "created_desc",
     return_total: bool = False,
 ) -> Dict[str, Any] | list[Dict[str, Any]]:
-    root = Path(KB_ROOT) / str(company_id)
+    migrate_documents_storage_layout(company_id)
+    root = _company_root(company_id)
     if not root.exists():
         if return_total:
             return {"total": 0, "items": []}
         return []
     term = (busca or "").strip().lower() if busca else ""
     should_load_content = include_content or bool(term)
-
+    area_filter = _sanitize(area) if area else None
+    categoria_filter = _sanitize(categoria) if categoria else None
+    tag_filter = _normalize_tag_filter(tag)
+    index_items = _ensure_documents_index(company_id)
     out: list[Dict[str, Any]] = []
-    for meta_file in root.rglob("document.meta.json"):
-        meta: Optional[Dict[str, Any]] = None
-        for attempt in range(3):
-            try:
-                with meta_file.open("r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                break
-            except (json.JSONDecodeError, OSError) as exc:
-                if isinstance(exc, OSError) and exc.errno == errno.EWOULDBLOCK and attempt < 2:
-                    time.sleep(0.05)
-                    continue
-                meta = None
-                break
-
-        if meta is None:
+    for item in index_items:
+        published_version = str(item.get("published_version", "") or "")
+        selected_version = str(item.get("version", "") or "")
+        if not published_version and not include_unpublished:
+            continue
+        if area_filter and item.get("area") != area_filter:
+            continue
+        if categoria_filter and item.get("categoria") != categoria_filter:
+            continue
+        if tag_filter and tag_filter not in [_normalize_tag_filter(entry) for entry in (item.get("tags") or [])]:
             continue
 
-        if area and meta.get("area") != _sanitize(area):
-            continue
-        if categoria and meta.get("categoria") != _sanitize(categoria):
-            continue
-        if tag and tag not in meta.get("tags", []):
-            continue
-
-        published_version = str(meta.get("published_version", "") or "")
-        selected_version = published_version
-        if not published_version:
-            if not include_unpublished:
-                continue
-            versions = [
-                entry
-                for entry in meta.get("versions", [])
-                if isinstance(entry, dict) and entry.get("version") is not None
-            ]
-            if not versions:
-                continue
-            versions = sorted(versions, key=lambda item: _version_key(item["version"]))
-            selected_version = str(versions[-1]["version"])
-
+        metadata_matches = True
         if term:
-            if (
-                term not in str(meta.get("title", "")).lower()
-                and term not in str(meta.get("slug", "")).lower()
-                and term not in " ".join(meta.get("tags", [])).lower()
-            ):
-                if should_load_content:
-                    try:
-                        content_payload = read_published_document_content(
-                            company_id=company_id,
-                            area=meta.get("area", ""),
-                            categoria=meta.get("categoria", ""),
-                            slug=meta.get("slug", ""),
-                            version=selected_version,
-                        )
-                        if term not in str(content_payload.get("content", "")).lower():
-                            continue
-                    except (FileNotFoundError, ValueError, OSError):
-                        continue
-                else:
-                    continue
+            metadata_matches = term in str(item.get("searchable_text", "")).lower()
 
         published_content = ""
-        if should_load_content:
+        if term and not metadata_matches:
+            continue
+        elif include_content:
             try:
                 published_content = read_published_document_content(
                     company_id=company_id,
-                    area=meta.get("area", ""),
-                    categoria=meta.get("categoria", ""),
-                    slug=meta.get("slug", ""),
+                    area=item.get("area", ""),
+                    categoria=item.get("categoria", ""),
+                    slug=item.get("slug", ""),
                     version=selected_version,
                 ).get("content", "")
             except (FileNotFoundError, ValueError, OSError):
                 published_content = ""
 
-        item = {
-            "document_uuid": meta.get("document_uuid"),
-            "satellite_document_id": meta.get("document_uuid"),
-            "empresa_id": company_id,
-            "slug": meta.get("slug"),
-            "titulo": meta.get("title"),
-            "area": meta.get("area"),
-            "categoria": meta.get("categoria"),
-            "tags": meta.get("tags", []),
-            "ai_prompt": meta.get("ai_prompt", ""),
-            "data_validade": meta.get("data_validade", ""),
-            "attachments": _public_attachments(meta),
-            "version": selected_version,
-            "published_version_uuid": next(
-                (
-                    entry.get("version_uuid")
-                    for entry in meta.get("versions", [])
-                    if _version_matches(entry.get("version"), selected_version)
-                ),
-                None,
-            ),
-            "published_version": published_version,
-            "satellite_version_id": next(
-                (
-                    entry.get("version_uuid")
-                    for entry in meta.get("versions", [])
-                    if _version_matches(entry.get("version"), selected_version)
-                ),
-                None,
-            ),
-            "created_at": meta.get("created_at"),
-            "updated_at": meta.get("updated_at"),
-        }
+        payload_item = dict(item)
         if include_content:
-            item["content"] = published_content
-
-        out.append(item)
+            payload_item["content"] = published_content
+        out.append(payload_item)
 
     def _validade_key(value: Any, missing_as_max: bool) -> datetime:
         raw = str(value or "").strip()
@@ -1262,7 +1732,14 @@ def read_published_document_content(
     if selected_entry is None:
         raise FileNotFoundError("Versão não encontrada no histórico do documento")
 
-    version_path = _version_path(company_id, area_n, categoria_n, slug_n, selected_version)
+    version_path = _version_path(
+        company_id,
+        area_n,
+        categoria_n,
+        slug_n,
+        selected_version,
+        document_uuid=str(meta.get("document_uuid")),
+    )
     if not version_path.exists():
         raise FileNotFoundError("Arquivo da versão não encontrado")
 

@@ -19,12 +19,13 @@ Repositório oficial no GitHub:
 - **Base de conhecimento sem banco de dados relacional**: conteúdo armazenado em arquivos no sistema de arquivos.
 - Estrutura principal:
   - `data/kb_store/` — diretório raiz da base.
-  - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/` — pasta do documento.
-  - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/v1.md`, `v2.md`, ...
+  - `data/kb_store/<empresa_id>/_documents/<document_uuid>/` — pasta física do documento.
+  - `data/kb_store/<empresa_id>/_documents/<document_uuid>/v1.md`, `v2.md`, ...
 - `document.meta.json` em cada pasta de documento controla versão publicada e histórico.
 - Cada versão é um arquivo independente e pode conter seu próprio frontmatter (version, data, autor, revisão).
 - O estado "publicado" é definido por `document.meta.json` com o campo `published_version`.
 - Também é possível controlar flags por versão dentro do próprio `frontmatter`.
+- `área`, `categoria` e `slug` continuam existindo como metadados do documento, mas não definem mais sua identidade física em disco.
 - A base de usuários e empresa é persistida em `SQLite` local (`data/system.sqlite3`).
 
 Exemplo de separação:
@@ -179,17 +180,16 @@ Este projeto já possui um esqueleto funcional em FastAPI com:
   - `companies`
   - `user_company_roles` (`admin`, `editor`, `revisor`)
 - Arquivos:
-  - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/v{n}.md`
-  - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/document.meta.json`
+  - `data/kb_store/<empresa_id>/_documents/<document_uuid>/v{n}.md`
+  - `data/kb_store/<empresa_id>/_documents/<document_uuid>/document.meta.json`
 
-### Limitação atual de versionamento
+### Persistência e migração
 
-- A identidade física do documento ainda é baseada em `empresa_id + area + categoria + slug`.
-- Na prática, `área` e `categoria` ainda fazem parte do path do documento em disco:
-  - `data/kb_store/<empresa_id>/<area>/<categoria>/<documento_slug>/`
-- Por isso, ao editar um documento existente e alterar apenas `área` ou `categoria`, o sistema atualmente cria um novo documento físico, em vez de apenas gerar uma nova versão do mesmo documento.
-- O comportamento esperado de negócio é diferente: `área` e `categoria` deveriam ser tratadas como metadados editáveis, sem trocar a identidade do documento.
-- Enquanto essa refatoração não for implementada, alterações de `área` ou `categoria` devem ser tratadas como criação de um novo documento no armazenamento.
+- A identidade física do documento agora é baseada em `empresa_id + document_uuid`.
+- `área`, `categoria` e `slug` são metadados editáveis e podem mudar sem criar um novo documento físico.
+- O startup da aplicação executa uma migração automática dos documentos legados para o layout novo por empresa.
+- A migração preserva `document_uuid`, versões, anexos e metadados existentes.
+- As rotas atuais continuam compatíveis e ainda aceitam `área/categoria/slug` para localizar o documento.
 
 ### Como executar (desenvolvimento)
 

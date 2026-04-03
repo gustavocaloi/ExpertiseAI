@@ -74,6 +74,8 @@ def create_app() -> FastAPI:
 
     if REBUILD_KB_ON_START:
         services.rebuild_documents_from_markdown_files(force=False)
+    else:
+        services.migrate_documents_storage_layout()
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     app.include_router(routers.router, prefix="/api/v1")
