@@ -439,23 +439,32 @@ function renderTaxonomies() {
       filterArea.value = currentArea;
     }
   }
-  if (filterCategoria) {
-    const currentCategoria = filterCategoria.value;
-    const categoriaNames = state.taxonomies.categorias
-      .map((item) => (typeof item === 'string' ? item?.trim() : `${item?.name || ''}`))
-      .filter(Boolean)
-      .filter((value, index, list) => list.indexOf(value) === index)
-      .sort();
-    filterCategoria.innerHTML = '<option value="">Todas as categorias</option>';
-    categoriaNames.forEach((name) => {
-      const option = document.createElement('option');
-      option.value = name;
-      option.textContent = name;
-      filterCategoria.appendChild(option);
-    });
-    if ([...filterCategoria.options].some((option) => option.value === currentCategoria)) {
-      filterCategoria.value = currentCategoria;
-    }
+  updateFilterCategoriaOptions();
+}
+
+function updateFilterCategoriaOptions() {
+  if (!filterCategoria) {
+    return;
+  }
+  const currentCategoria = filterCategoria.value;
+  const selectedArea = (filterArea?.value || '').trim();
+  const categoriaNames = state.taxonomies.categorias
+    .filter((item) => !selectedArea || (item?.area || item?.parent_area || '') === selectedArea)
+    .map((item) => (typeof item === 'string' ? item?.trim() : `${item?.name || ''}`))
+    .filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index)
+    .sort();
+  filterCategoria.innerHTML = '<option value="">Todas as categorias</option>';
+  categoriaNames.forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    filterCategoria.appendChild(option);
+  });
+  if ([...filterCategoria.options].some((option) => option.value === currentCategoria)) {
+    filterCategoria.value = currentCategoria;
+  } else {
+    filterCategoria.value = '';
   }
 }
 
@@ -2681,7 +2690,10 @@ function resetPaginationAndLoadPublishedDocs() {
   void loadPublishedDocs();
 }
 
-filterArea?.addEventListener('change', resetPaginationAndLoadPublishedDocs);
+filterArea?.addEventListener('change', () => {
+  updateFilterCategoriaOptions();
+  resetPaginationAndLoadPublishedDocs();
+});
 filterCategoria?.addEventListener('change', resetPaginationAndLoadPublishedDocs);
 document.getElementById('filterTag').addEventListener('change', resetPaginationAndLoadPublishedDocs);
 document.getElementById('filterBusca').addEventListener('input', () => {
