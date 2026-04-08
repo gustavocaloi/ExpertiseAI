@@ -9,11 +9,13 @@ DATA_DIR = Path(os.getenv("EXPAI_DATA_DIR", ROOT_DIR / "data"))
 DB_PATH = Path(os.getenv("EXPAI_DB_PATH", DATA_DIR / "system.sqlite3"))
 KB_ROOT = Path(os.getenv("EXPAI_KB_ROOT", DATA_DIR / "kb_store"))
 LOG_LEVEL = os.getenv("EXPAI_LOG_LEVEL", "INFO").strip().upper()
+APP_ENV = os.getenv("EXPAI_APP_ENV", "development").strip().lower()
 
 SECRET_KEY = os.getenv("EXPAI_SECRET_KEY", "change-me")
 ALGORITHM = os.getenv("EXPAI_JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("EXPAI_ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 ACCESS_CONTROL_ENABLED = os.getenv("EXPAI_ACCESS_CONTROL_ENABLED", "true").lower() in {"1", "true", "yes"}
+ALLOW_PUBLIC_COMPANY_CREATE = os.getenv("EXPAI_ALLOW_PUBLIC_COMPANY_CREATE", "false").lower() in {"1", "true", "yes"}
 _api_base_url = os.getenv("EXPAI_API_BASE_URL", "").strip()
 API_BASE_URL = _api_base_url or "http://localhost:8000"
 

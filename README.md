@@ -37,9 +37,20 @@ Exemplo de separação:
 - **Multi-empresa (multi-tenant)**: cada usuário pertence a uma empresa (cliente) e enxerga somente dados administrativos e permissões da sua empresa, com escopo por organização.
 - **Multi-usuários por empresa**: cada empresa pode ter vários usuários vinculados.
 - Perfis de acesso fixos:
-  - `admin`: administra usuários, perfis, políticas e configurações da empresa.
-  - `editor`: cria e edita conteúdos, cria novas versões e solicita publicação.
-  - `revisor`: valida e aprova versões para publicação.
+  - `admin`: acesso total, incluindo gestão de usuários, perfis e criação de empresas.
+  - `editor`: cria, edita e exclui documentos, áreas e categorias.
+  - `aprovador`: aprova a publicação de versões de documentos.
+- Os perfis podem ser acumulativos por usuário dentro da empresa.
+- Quando houver mais de um perfil, o sistema considera o maior nível de acesso como perfil efetivo, sem perder as permissões acumuladas.
+- A tela administrativa de usuários permite criar/vincular usuários, ajustar perfis acumulativos, redefinir nome e senha e revogar ou reativar acessos por empresa.
+- A administração de usuários também mantém filtro por status de acesso e uma trilha recente de auditoria das alterações feitas pelos administradores.
+- Para empresas com muitos usuários, a tela administrativa também oferece busca por nome/e-mail e paginação da listagem.
+- A listagem administrativa permite ordenação por nome, status e perfil efetivo, e a trilha de auditoria pode ser exportada em CSV.
+- Administradores também podem restringir por usuário quais áreas de documentos ficam visíveis; administradores seguem com acesso total.
+- A lista de usuários exibe um resumo do escopo de áreas configurado para cada usuário, facilitando auditoria visual rápida.
+- Além do perfil padrão por usuário, administradores podem criar perfis reutilizáveis de restrição por área e atribuir um ou mais deles a cada usuário.
+- Na administração de usuários, a listagem é compacta e a edição completa acontece em popup, incluindo vínculo com regras de restrição.
+- Senhas provisórias de novos usuários ou redefinidas por administradores exigem troca no primeiro acesso, exceto para o superadmin.
 - O vínculo `usuário -> empresa -> perfil` é persistido em SQLite e aplicado como filtro de permissão na API e na UI.
 
 Exemplo de frontmatter:
@@ -101,7 +112,7 @@ arquivo_publicado: v2.md
 - Feedback de usuário (útil / não útil) para melhoria contínua.
 
 ### 5. Acesso por times e perfis
-- Controle de acesso por função (admin, editor, revisor) dentro do contexto de cada empresa.
+- Controle de acesso por função (`admin`, `editor`, `aprovador`) dentro do contexto de cada empresa.
 - Permissões por coleção, categoria e documento.
 - Trilhas de aprovação para publicação de conteúdos críticos.
 - Auditoria de ações (quem criou, alterou, revisou e aprovou).
@@ -109,7 +120,7 @@ arquivo_publicado: v2.md
 ### 6. Colaboração e revisão
 - Edição colaborativa de artigos.
 - Comentários e sugestões de melhoria por trecho.
-- Aprovação por múltiplos revisores antes de publicar.
+- Aprovação de publicação por usuários com perfil `aprovador`.
 - Menções e solicitações de revisão entre colegas.
 - Alertas de expiração e revisão periódica de conteúdos sensíveis.
 
@@ -161,7 +172,7 @@ arquivo_publicado: v2.md
 Este projeto já possui um esqueleto funcional em FastAPI com:
 
 - Multi-empresa (cada empresa tem pasta dedicada na base de conhecimento).
-- Autenticação por JWT com perfis: `admin`, `editor`, `revisor`.
+- Autenticação por JWT com perfis: `admin`, `editor`, `aprovador`.
 - Base de conhecimento em arquivos `.md` versionados por documento.
 - Banco SQLite local para usuários, empresas e relação usuário-empresa-perfil.
 - Rota de consulta pública por empresa dos documentos publicados.
@@ -178,7 +189,7 @@ Este projeto já possui um esqueleto funcional em FastAPI com:
 - `SQLite`:
   - `users`
   - `companies`
-  - `user_company_roles` (`admin`, `editor`, `revisor`)
+  - `user_company_roles` (`admin`, `editor`, `aprovador`)
 - Arquivos:
   - `data/kb_store/<empresa_id>/_documents/<document_uuid>/v{n}.md`
   - `data/kb_store/<empresa_id>/_documents/<document_uuid>/document.meta.json`
@@ -220,6 +231,29 @@ Comandos:
 cp .env.example .env
 docker compose up --build -d
 ```
+
+Build local rápido:
+
+```bash
+./scripts/run-container-fast.sh
+```
+
+- usa [`docker/docker-compose.fast.yml`](/Users/gustavocaloi/Documents/dev/ExpertiseAI/docker/docker-compose.fast.yml)
+- reaproveita cache do Docker
+- não força `--no-cache`
+- não faz prefetch dos modelos do Docling durante o build
+- ideal para desenvolvimento local e iteração rápida
+
+Build completo/offline:
+
+```bash
+./scripts/run-container-build.sh
+```
+
+- usa [`docker/docker-compose.build.yml`](/Users/gustavocaloi/Documents/dev/ExpertiseAI/docker/docker-compose.build.yml)
+- faz build completo da imagem
+- empacota os modelos do Docling no build
+- mais lento, mas melhor para cenários em que o container precisa subir já pronto para processamento offline
 
 ### Modelos Docling offline no container
 
@@ -367,7 +401,9 @@ Esses valores podem ser alterados por variáveis de ambiente:
 - `EXPAI_SUPER_ADMIN_USER`
 - `EXPAI_SUPER_ADMIN_PASSWORD`
 - `EXPAI_BOOTSTRAP_DEFAULT_ADMIN` (`true` ou `false`)
+- `EXPAI_APP_ENV` (`development` ou `production`)
 - `EXPAI_ACCESS_CONTROL_ENABLED` (`true` ou `false`)
+- `EXPAI_ALLOW_PUBLIC_COMPANY_CREATE` (`true` ou `false`)
 - `EXPAI_API_BASE_URL` (ex.: `http://localhost:8000`, usada na documentação Swagger/OpenAPI)
 
 Recomenda-se alterar a senha padrão logo no primeiro acesso.
@@ -388,6 +424,12 @@ o sistema entra em modo sem controle de usuários:
 - As rotas continuam operando sem token/JWT.
 - Toda alteração em documentos grava autoria como `anônimo`.
 - A sessão de administração de usuários é ocultada no frontend.
+
+Restrições de segurança:
+
+- Em `EXPAI_APP_ENV=production`, o sistema não inicia com `EXPAI_ACCESS_CONTROL_ENABLED=false`.
+- Em `EXPAI_APP_ENV=production`, o sistema não inicia com `EXPAI_ALLOW_PUBLIC_COMPANY_CREATE=true`.
+- A criação pública de empresa fica desabilitada por padrão e só deve ser ativada explicitamente em cenários controlados.
 
 ### Usuário e senha padrão (desenvolvimento)
 

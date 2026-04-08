@@ -4,6 +4,7 @@ const state = {
   accessControlEnabled: true,
   defaultCompanyName: '',
   defaultCompanyDescription: '',
+  pendingApprovalTotal: 0,
   profile: null,
   taxonomies: {
     areas: [],
@@ -45,6 +46,7 @@ const taxonomyMsg = document.getElementById('taxonomyMsg');
 const sessionButtons = Array.from(document.querySelectorAll('.menu-item[data-session]'));
 const toastContainer = document.getElementById('toastContainer');
 const docsList = document.getElementById('docsList');
+const refreshDocsButton = document.getElementById('refreshDocs');
 const createSession = document.getElementById('createSession');
 const docModal = document.getElementById('docViewerModal');
 const docModalOverlay = document.getElementById('docModalOverlay');
@@ -78,14 +80,65 @@ const docCategoria = document.getElementById('docCategoria');
 const filterArea = document.getElementById('filterArea');
 const filterCategoria = document.getElementById('filterCategoria');
 const userAdminMenuItem = document.getElementById('userAdminMenuItem');
+const userAreaAccessMenuItem = document.getElementById('userAreaAccessMenuItem');
 const userAdminSession = document.getElementById('userAdminSession');
+const userAreaAccessSession = document.getElementById('userAreaAccessSession');
 const usersList = document.getElementById('usersList');
 const addUserForm = document.getElementById('addUserForm');
 const newUserName = document.getElementById('newUserName');
 const newUserEmail = document.getElementById('newUserEmail');
 const newUserPassword = document.getElementById('newUserPassword');
 const newUserRole = document.getElementById('newUserRole');
+const newUserRestrictionTrigger = document.getElementById('newUserRestrictionTrigger');
+const newUserRestrictionTriggerLabel = document.getElementById('newUserRestrictionTriggerLabel');
+const newUserRestrictionDropdown = document.getElementById('newUserRestrictionDropdown');
 const userAdminMsg = document.getElementById('userAdminMsg');
+const userAccessStatusFilter = document.getElementById('userAccessStatusFilter');
+const userAccessSearch = document.getElementById('userAccessSearch');
+const userAccessSort = document.getElementById('userAccessSort');
+const userAuditList = document.getElementById('userAuditList');
+const userAuditExportButton = document.getElementById('userAuditExport');
+const userAuditPrevButton = document.getElementById('userAuditPrev');
+const userAuditNextButton = document.getElementById('userAuditNext');
+const userAuditPagerInfo = document.getElementById('userAuditPagerInfo');
+const usersPrevButton = document.getElementById('usersPrev');
+const usersNextButton = document.getElementById('usersNext');
+const usersPagerInfo = document.getElementById('usersPagerInfo');
+const areaAccessUserSelect = document.getElementById('areaAccessUserSelect');
+const areaAccessMode = document.getElementById('areaAccessMode');
+const areaAccessChecklist = document.getElementById('areaAccessChecklist');
+const areaAccessProfilesList = document.getElementById('areaAccessProfilesList');
+const saveAreaAccessBtn = document.getElementById('saveAreaAccessBtn');
+const areaAccessMsg = document.getElementById('areaAccessMsg');
+const createAreaRestrictionProfileForm = document.getElementById('createAreaRestrictionProfileForm');
+const areaRestrictionProfileName = document.getElementById('areaRestrictionProfileName');
+const areaRestrictionProfileDescription = document.getElementById('areaRestrictionProfileDescription');
+const areaRestrictionProfileChecklist = document.getElementById('areaRestrictionProfileChecklist');
+const areaRestrictionProfileMsg = document.getElementById('areaRestrictionProfileMsg');
+const userAccessModal = document.getElementById('userAccessModal');
+const userAccessModalOverlay = document.getElementById('userAccessModalOverlay');
+const userAccessModalCloseBtn = document.getElementById('userAccessModalCloseBtn');
+const userAccessModalTitle = document.getElementById('userAccessModalTitle');
+const userAccessModalMeta = document.getElementById('userAccessModalMeta');
+const userAccessModalName = document.getElementById('userAccessModalName');
+const userAccessModalEmail = document.getElementById('userAccessModalEmail');
+const userAccessModalRoles = document.getElementById('userAccessModalRoles');
+const userAccessModalRestrictionTrigger = document.getElementById('userAccessModalRestrictionTrigger');
+const userAccessModalRestrictionTriggerLabel = document.getElementById('userAccessModalRestrictionTriggerLabel');
+const userAccessModalRestrictionDropdown = document.getElementById('userAccessModalRestrictionDropdown');
+const userAccessModalPassword = document.getElementById('userAccessModalPassword');
+const userAccessModalScope = document.getElementById('userAccessModalScope');
+const userAccessModalRestrictionProfiles = document.getElementById('userAccessModalRestrictionProfiles');
+const userAccessModalPasswordFlag = document.getElementById('userAccessModalPasswordFlag');
+const userAccessModalOpenAreas = document.getElementById('userAccessModalOpenAreas');
+const userAccessModalRevoke = document.getElementById('userAccessModalRevoke');
+const userAccessModalSave = document.getElementById('userAccessModalSave');
+const userAccessModalMsg = document.getElementById('userAccessModalMsg');
+const forcePasswordModal = document.getElementById('forcePasswordModal');
+const forcePasswordNew = document.getElementById('forcePasswordNew');
+const forcePasswordConfirm = document.getElementById('forcePasswordConfirm');
+const forcePasswordSave = document.getElementById('forcePasswordSave');
+const forcePasswordMsg = document.getElementById('forcePasswordMsg');
 const editHistorySession = document.getElementById('editHistorySession');
 const editVersionsList = document.getElementById('editVersionsList');
 const editHistoryHint = document.getElementById('editHistoryHint');
@@ -130,6 +183,40 @@ const pagination = {
   total: 0,
 };
 let docsSearchDebounceTimer = null;
+const ACCESS_ROLE_OPTIONS = ['admin', 'editor', 'aprovador'];
+let companyUsersCache = [];
+let companyUserAuditCache = [];
+let areaAccessState = {
+  availableAreas: [],
+  selectedAreas: [],
+  profiles: [],
+  assignedProfileIds: [],
+  effectiveScope: { mode: 'all', areas: [] },
+};
+let areaRestrictionProfilesCatalog = [];
+let newUserAssignedRestrictionProfileIds = [];
+let selectedUserAccessRecord = null;
+let selectedUserAccessRestrictionState = {
+  defaultScope: { mode: 'all', areas: [] },
+  assignedProfileIds: [],
+  profiles: [],
+};
+const usersPagination = {
+  page: 1,
+  limit: 10,
+  total: 0,
+};
+const userAuditPagination = {
+  page: 1,
+  limit: 10,
+  total: 0,
+};
+
+const USER_ROLE_WEIGHT = {
+  admin: 3,
+  editor: 2,
+  aprovador: 1,
+};
 
 function docTitleOf(doc) {
   return doc?.titulo || doc?.title || '';
@@ -260,7 +347,234 @@ function normalizeDocumentError(errorValue) {
 }
 
 function canDeleteDocumentCard() {
-  return !isAccessControlEnabled() || isAdminProfile();
+  return !isAccessControlEnabled() || isAdminProfile() || hasRole('editor');
+}
+
+function canViewUploadQueue(profile = state.profile) {
+  return !isAccessControlEnabled() || hasRole('editor', profile);
+}
+
+function canCreateNewDocument(profile = state.profile) {
+  return !isAccessControlEnabled() || hasRole('editor', profile);
+}
+
+function normalizedRolesOf(profile = state.profile) {
+  const rawRoles = Array.isArray(profile?.roles) && profile.roles.length ? profile.roles : [profile?.role || ''];
+  return rawRoles
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item, index, list) => item && list.indexOf(item) === index);
+}
+
+function hasRole(role, profile = state.profile) {
+  const target = String(role || '').trim().toLowerCase();
+  const roles = normalizedRolesOf(profile);
+  return roles.includes('admin') || roles.includes(target);
+}
+
+function canPublishDocument(profile = state.profile) {
+  return !isAccessControlEnabled() || hasRole('aprovador', profile);
+}
+
+function isPendingApprovalVersion(payload = {}) {
+  return Boolean(payload?.pending_approval);
+}
+
+function updateDashboardApprovalStatus() {
+  if (!state.profile) {
+    setPanelStatusText();
+    return;
+  }
+  const pendingTotal = Number(state.pendingApprovalTotal || 0);
+  if (canPublishDocument()) {
+    setStatus(
+      pendingTotal > 0
+        ? `${pendingTotal} pendente(s) de aprovação`
+        : 'Nenhuma pendência de aprovação',
+    );
+    return;
+  }
+  setStatus('Sem pendências de aprovação');
+}
+
+function formatRoleLabel(profile = state.profile) {
+  const roles = normalizedRolesOf(profile);
+  if (!roles.length) {
+    return profile?.role || 'sem perfil';
+  }
+  return roles.join(', ');
+}
+
+function setUserAdminMessage(message = '', type = '') {
+  if (!userAdminMsg) {
+    return;
+  }
+  userAdminMsg.textContent = message;
+  userAdminMsg.className = type ? `helper ${type}` : 'helper';
+}
+
+function setAreaAccessMessage(message = '', type = '') {
+  if (!areaAccessMsg) {
+    return;
+  }
+  areaAccessMsg.textContent = message;
+  areaAccessMsg.className = type ? `helper ${type}` : 'helper';
+}
+
+function setAreaRestrictionProfileMessage(message = '', type = '') {
+  if (!areaRestrictionProfileMsg) {
+    return;
+  }
+  areaRestrictionProfileMsg.textContent = message;
+  areaRestrictionProfileMsg.className = type ? `helper ${type}` : 'helper';
+}
+
+function setUserAccessModalMessage(message = '', type = '') {
+  if (!userAccessModalMsg) {
+    return;
+  }
+  userAccessModalMsg.textContent = message;
+  userAccessModalMsg.className = type ? `helper ${type}` : 'helper';
+}
+
+function setForcePasswordMessage(message = '', type = '') {
+  if (!forcePasswordMsg) {
+    return;
+  }
+  forcePasswordMsg.textContent = message;
+  forcePasswordMsg.className = type ? `helper ${type}` : 'helper';
+}
+
+function updateCreateDocumentButtonAvailability() {
+  if (!refreshDocsButton) {
+    return;
+  }
+  const allowed = canCreateNewDocument();
+  refreshDocsButton.disabled = !allowed;
+  refreshDocsButton.title = allowed
+    ? 'Publicar novo documento'
+    : 'Somente editores ou administradores podem criar novos documentos.';
+}
+
+function closeUserAccessRestrictionDropdown() {
+  if (!userAccessModalRestrictionDropdown) {
+    return;
+  }
+  userAccessModalRestrictionDropdown.classList.add('hidden-view');
+  userAccessModalRestrictionTrigger?.setAttribute('aria-expanded', 'false');
+}
+
+function closeNewUserRestrictionDropdown() {
+  if (!newUserRestrictionDropdown) {
+    return;
+  }
+  newUserRestrictionDropdown.classList.add('hidden-view');
+  newUserRestrictionTrigger?.setAttribute('aria-expanded', 'false');
+}
+
+function findAssignedRestrictionProfiles(profiles = [], assignedIds = []) {
+  return profiles.filter((profile) => assignedIds.includes(Number(profile.id)));
+}
+
+function updateRestrictionTriggerLabel(labelElement, profiles = [], assignedIds = [], emptyLabel = 'Nenhum perfil de restrição') {
+  if (!labelElement) {
+    return;
+  }
+  const assignedProfiles = findAssignedRestrictionProfiles(profiles, assignedIds);
+  if (!assignedProfiles.length) {
+    labelElement.textContent = emptyLabel;
+    return;
+  }
+  labelElement.textContent = assignedProfiles.map((profile) => profile.name || `perfil ${profile.id}`).join(', ');
+}
+
+function updateUserAccessRestrictionTriggerLabel() {
+  updateRestrictionTriggerLabel(
+    userAccessModalRestrictionTriggerLabel,
+    selectedUserAccessRestrictionState.profiles || [],
+    selectedUserAccessRestrictionState.assignedProfileIds || [],
+  );
+}
+
+function updateNewUserRestrictionTriggerLabel() {
+  updateRestrictionTriggerLabel(
+    newUserRestrictionTriggerLabel,
+    areaRestrictionProfilesCatalog,
+    newUserAssignedRestrictionProfileIds,
+    'Nenhum perfil de restrição',
+  );
+}
+
+function renderRestrictionDropdown(dropdownElement, profiles = [], assignedIds = []) {
+  if (!dropdownElement) {
+    return;
+  }
+  if (!profiles.length) {
+    dropdownElement.innerHTML = '<span class="helper">Nenhum perfil reutilizável disponível.</span>';
+    return;
+  }
+  dropdownElement.innerHTML = '';
+  profiles.forEach((profile) => {
+    const label = document.createElement('label');
+    label.className = 'multi-combobox__option';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = String(profile.id || '');
+    input.checked = assignedIds.includes(Number(profile.id));
+    const textWrap = document.createElement('span');
+    textWrap.className = 'multi-combobox__option-text';
+    const title = document.createElement('strong');
+    title.textContent = profile.name || `perfil ${profile.id}`;
+    const meta = document.createElement('small');
+    meta.textContent = (profile.areas || []).length ? (profile.areas || []).join(', ') : 'sem áreas';
+    textWrap.appendChild(title);
+    if (profile.description) {
+      const desc = document.createElement('small');
+      desc.textContent = profile.description;
+      textWrap.appendChild(desc);
+    }
+    textWrap.appendChild(meta);
+    label.appendChild(input);
+    label.appendChild(textWrap);
+    dropdownElement.appendChild(label);
+  });
+}
+
+function renderUserAccessRestrictionDropdown() {
+  renderRestrictionDropdown(
+    userAccessModalRestrictionDropdown,
+    selectedUserAccessRestrictionState.profiles || [],
+    selectedUserAccessRestrictionState.assignedProfileIds || [],
+  );
+  if (userAccessModalRestrictionTrigger) {
+    userAccessModalRestrictionTrigger.disabled = (selectedUserAccessRestrictionState.profiles || []).length === 0;
+  }
+  updateUserAccessRestrictionTriggerLabel();
+}
+
+function renderNewUserRestrictionDropdown() {
+  renderRestrictionDropdown(newUserRestrictionDropdown, areaRestrictionProfilesCatalog, newUserAssignedRestrictionProfileIds);
+  updateNewUserRestrictionTriggerLabel();
+  if (newUserRestrictionTrigger) {
+    newUserRestrictionTrigger.disabled = areaRestrictionProfilesCatalog.length === 0;
+  }
+}
+
+function collectUserAccessRestrictionProfileIds() {
+  if (!userAccessModalRestrictionDropdown) {
+    return [];
+  }
+  return Array.from(userAccessModalRestrictionDropdown.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => Number(input.value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+}
+
+function collectNewUserRestrictionProfileIds() {
+  if (!newUserRestrictionDropdown) {
+    return [];
+  }
+  return Array.from(newUserRestrictionDropdown.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => Number(input.value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
 }
 
 async function handleDeleteDocument(doc) {
@@ -475,7 +789,7 @@ function renderTaxonomyError(message) {
 }
 
 function isAdminProfile(profile = state.profile) {
-  return (profile?.role || '').toLowerCase() === 'admin';
+  return hasRole('admin', profile);
 }
 
 function toBooleanValue(value, fallback = true) {
@@ -507,32 +821,744 @@ function ensureAnonymousProfile() {
     full_name: 'Anônimo',
     email: 'anônimo',
     role: 'anônimo',
+    roles: ['anônimo'],
     company_id: companyId || 0,
     company_name: state.defaultCompanyName || (companyId ? `empresa ${companyId}` : 'empresa'),
     company_description: state.defaultCompanyDescription || '',
   };
   renderProfileToUi(state.profile);
   setPanelStatusText();
+  updatePublishControls();
 }
 
 function renderUsersList(users = []) {
   if (!usersList) {
     return;
   }
-  if (!users.length) {
+  const statusFilter = userAccessStatusFilter?.value || 'all';
+  const searchTerm = String(userAccessSearch?.value || '').trim().toLowerCase();
+  const sortMode = userAccessSort?.value || 'name_asc';
+  const filteredUsers = users.filter((item) => {
+    if (statusFilter === 'active') {
+      if (!item.active) return false;
+    }
+    if (statusFilter === 'inactive') {
+      if (item.active) return false;
+    }
+    if (!searchTerm) {
+      return true;
+    }
+    const haystack = [
+      item.full_name || item.nome || '',
+      item.email || '',
+      ...(Array.isArray(item.roles) ? item.roles : []),
+      item.role || '',
+      item.area_scope_summary || '',
+      ...((item.area_scope_profiles || []).map((profile) => profile?.name || '')),
+      ...((item.area_scope?.areas || [])),
+    ].join(' ').toLowerCase();
+    return haystack.includes(searchTerm);
+  });
+  filteredUsers.sort((a, b) => {
+    const nameA = String(a.full_name || a.nome || '').toLowerCase();
+    const nameB = String(b.full_name || b.nome || '').toLowerCase();
+    const roleA = USER_ROLE_WEIGHT[String(a.role || '').toLowerCase()] || 0;
+    const roleB = USER_ROLE_WEIGHT[String(b.role || '').toLowerCase()] || 0;
+    const activeA = a.active ? 1 : 0;
+    const activeB = b.active ? 1 : 0;
+    if (sortMode === 'name_desc') {
+      return nameB.localeCompare(nameA);
+    }
+    if (sortMode === 'status_active_first') {
+      if (activeA !== activeB) return activeB - activeA;
+      return nameA.localeCompare(nameB);
+    }
+    if (sortMode === 'status_inactive_first') {
+      if (activeA !== activeB) return activeA - activeB;
+      return nameA.localeCompare(nameB);
+    }
+    if (sortMode === 'role_desc') {
+      if (roleA !== roleB) return roleB - roleA;
+      return nameA.localeCompare(nameB);
+    }
+    return nameA.localeCompare(nameB);
+  });
+  usersPagination.total = filteredUsers.length;
+  const totalPages = Math.max(1, Math.ceil(usersPagination.total / usersPagination.limit));
+  usersPagination.page = Math.min(Math.max(1, usersPagination.page), totalPages);
+  const startIndex = (usersPagination.page - 1) * usersPagination.limit;
+  const pagedUsers = filteredUsers.slice(startIndex, startIndex + usersPagination.limit);
+  if (usersPagerInfo) {
+    if (!usersPagination.total) {
+      usersPagerInfo.textContent = 'Página 1 de 1 — 0 usuário(s)';
+    } else {
+      usersPagerInfo.textContent = `Página ${usersPagination.page} de ${totalPages} — ${startIndex + 1} a ${Math.min(startIndex + pagedUsers.length, usersPagination.total)} de ${usersPagination.total} usuário(s)`;
+    }
+  }
+  if (usersPrevButton) {
+    usersPrevButton.disabled = usersPagination.page <= 1 || usersPagination.total <= 0;
+  }
+  if (usersNextButton) {
+    usersNextButton.disabled = usersPagination.page >= totalPages || usersPagination.total <= 0;
+  }
+  if (!pagedUsers.length) {
     usersList.innerHTML = '<li>Nenhum usuário encontrado.</li>';
     return;
   }
   usersList.innerHTML = '';
-  users.forEach((item) => {
+  pagedUsers.forEach((item) => {
     const li = document.createElement('li');
-    li.className = 'items-list-item';
+    li.className = 'items-list-item user-access-list-item';
+    li.dataset.userId = String(item.id || '');
+    const effectiveRole = item.role || formatRoleLabel(item) || '-';
     li.innerHTML = `
-      <span>${item.full_name || item.nome || '-'} · ${item.email || '-'}</span>
-      <strong>${item.role || '-'}</strong>
+      <div class="user-access-list-item__summary">
+        <strong>${item.full_name || item.nome || '-'}</strong>
+        <small>${effectiveRole}</small>
+      </div>
     `;
     usersList.appendChild(li);
   });
+}
+
+function formatAuditActionLabel(item = {}) {
+  const action = String(item.action || '').trim().toLowerCase();
+  if (action === 'grant') return 'Acesso concedido';
+  if (action === 'update') return 'Acesso atualizado';
+  if (action === 'revoke') return 'Acesso removido';
+  if (action === 'scope') return 'Escopo de áreas atualizado';
+  if (action === 'scope-profile') return 'Perfil de restrição alterado';
+  return action || 'Alteração de acesso';
+}
+
+function escapeCsvValue(value) {
+  const text = String(value ?? '');
+  if (/[",\n;]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function downloadTextFile(filename, content, mimeType = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function renderUserAuditList(items = []) {
+  if (!userAuditList) {
+    return;
+  }
+  if (!items.length) {
+    userAuditList.innerHTML = '<li>Nenhum evento de auditoria encontrado.</li>';
+    return;
+  }
+  userAuditList.innerHTML = '';
+  items.forEach((item) => {
+    const li = document.createElement('li');
+    li.className = 'items-list-item user-audit-item';
+    const rolesLabel = Array.isArray(item.roles) && item.roles.length ? item.roles.join(', ') : 'sem perfis';
+    li.innerHTML = `
+      <div class="user-audit-item__content">
+        <strong>${formatAuditActionLabel(item)}</strong>
+        <span>${item.target_name || '-'} · ${item.target_email || '-'}</span>
+        <small>Por ${item.actor_name || '-'} · ${item.created_at || '-'} · ${rolesLabel}</small>
+        ${item.note ? `<small>${item.note}</small>` : ''}
+      </div>
+    `;
+    userAuditList.appendChild(li);
+  });
+}
+
+function updateUserAuditPager() {
+  const totalPages = Math.max(1, Math.ceil(userAuditPagination.total / userAuditPagination.limit));
+  userAuditPagination.page = Math.min(Math.max(1, userAuditPagination.page), totalPages);
+  const startIndex = (userAuditPagination.page - 1) * userAuditPagination.limit;
+  const endIndex = userAuditPagination.total > 0
+    ? Math.min(startIndex + userAuditPagination.limit, userAuditPagination.total)
+    : 0;
+
+  if (userAuditPagerInfo) {
+    if (!userAuditPagination.total) {
+      userAuditPagerInfo.textContent = 'Página 1 de 1 — 0 registro(s)';
+    } else {
+      userAuditPagerInfo.textContent = `Página ${userAuditPagination.page} de ${totalPages} — ${startIndex + 1} a ${endIndex} de ${userAuditPagination.total} registro(s)`;
+    }
+  }
+  if (userAuditPrevButton) {
+    userAuditPrevButton.disabled = userAuditPagination.page <= 1 || userAuditPagination.total <= 0;
+  }
+  if (userAuditNextButton) {
+    userAuditNextButton.disabled = userAuditPagination.page >= totalPages || userAuditPagination.total <= 0;
+  }
+}
+
+function resetUserAuditPagination() {
+  userAuditPagination.page = 1;
+}
+
+function getUserByIdFromCache(userId) {
+  return (companyUsersCache || []).find((item) => Number(item.id) === Number(userId)) || null;
+}
+
+async function openUserAccessModal(userId) {
+  const user = getUserByIdFromCache(userId);
+  if (!user || !userAccessModal) {
+    return;
+  }
+  selectedUserAccessRecord = user;
+  const activeRoles = normalizedRolesOf(user);
+  if (userAccessModalTitle) {
+    userAccessModalTitle.textContent = user.full_name || user.email || 'Usuário';
+  }
+  if (userAccessModalMeta) {
+    userAccessModalMeta.textContent = `${user.active ? 'Acesso ativo' : 'Sem acesso ativo'} · Perfil efetivo: ${user.role || '-'}`;
+  }
+  if (userAccessModalName) {
+    userAccessModalName.value = user.full_name || '';
+  }
+  if (userAccessModalEmail) {
+    userAccessModalEmail.value = user.email || '';
+  }
+  if (userAccessModalPassword) {
+    userAccessModalPassword.value = '';
+  }
+  if (userAccessModalRoles) {
+    userAccessModalRoles.innerHTML = '';
+    ACCESS_ROLE_OPTIONS.forEach((role) => {
+      const label = document.createElement('label');
+      label.className = 'user-access-role';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = role;
+      input.checked = activeRoles.includes(role);
+      const span = document.createElement('span');
+      span.textContent = role;
+      label.appendChild(input);
+      label.appendChild(span);
+      userAccessModalRoles.appendChild(label);
+    });
+  }
+  if (userAccessModalScope) {
+    userAccessModalScope.textContent = user.area_scope_summary || 'todas as áreas';
+  }
+  if (userAccessModalRestrictionProfiles) {
+    const names = (user.area_scope_profiles || []).map((profile) => profile?.name || '').filter(Boolean);
+    userAccessModalRestrictionProfiles.textContent = names.length ? names.join(', ') : 'nenhum';
+  }
+  if (userAccessModalPasswordFlag) {
+    userAccessModalPasswordFlag.textContent = user.require_password_change ? 'troca pendente no próximo acesso' : 'ok';
+  }
+  setUserAccessModalMessage('');
+  closeUserAccessRestrictionDropdown();
+  try {
+    const payload = await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${user.id}/areas-acesso`);
+    selectedUserAccessRestrictionState = {
+      defaultScope: payload?.scope || { mode: 'all', areas: [] },
+      assignedProfileIds: (payload?.assigned_profile_ids || []).map((item) => Number(item)),
+      profiles: (payload?.profiles || []).length ? (payload?.profiles || []) : areaRestrictionProfilesCatalog,
+    };
+  } catch (_error) {
+    selectedUserAccessRestrictionState = {
+      defaultScope: user.area_scope_default || { mode: 'all', areas: [] },
+      assignedProfileIds: ((user.area_scope_profiles || []).map((profile) => Number(profile.id))).filter((value) => Number.isFinite(value)),
+      profiles: areaRestrictionProfilesCatalog,
+    };
+  }
+  renderUserAccessRestrictionDropdown();
+  userAccessModal.setAttribute('aria-hidden', 'false');
+  userAccessModal.classList.add('open');
+}
+
+function closeUserAccessModal() {
+  if (!userAccessModal) {
+    return;
+  }
+  userAccessModal.classList.remove('open');
+  userAccessModal.setAttribute('aria-hidden', 'true');
+  closeUserAccessRestrictionDropdown();
+  selectedUserAccessRecord = null;
+}
+
+async function openSelectedUserAreaRestrictions() {
+  const user = selectedUserAccessRecord;
+  if (!user) {
+    return;
+  }
+  closeUserAccessModal();
+  await openAreaAccessSession(user.id);
+}
+
+function collectUserAccessModalRoles() {
+  if (!userAccessModalRoles) {
+    return [];
+  }
+  return Array.from(userAccessModalRoles.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => input.value || '')
+    .filter(Boolean);
+}
+
+async function saveSelectedUserAccess() {
+  const user = selectedUserAccessRecord;
+  if (!user || !state.companyId) {
+    setUserAccessModalMessage('Usuário não selecionado.', 'error');
+    return;
+  }
+  const roles = collectUserAccessModalRoles();
+  const profileIds = collectUserAccessRestrictionProfileIds();
+  const fullName = userAccessModalName?.value?.trim() || '';
+  const password = userAccessModalPassword?.value || '';
+  if (!roles.length) {
+    setUserAccessModalMessage('Selecione ao menos um perfil ou use revogar acesso.', 'error');
+    return;
+  }
+  if (!fullName) {
+    setUserAccessModalMessage('Informe um nome válido.', 'error');
+    return;
+  }
+  try {
+    await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${user.id}/acessos`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        roles,
+        full_name: fullName,
+        password,
+      }),
+    });
+    await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${user.id}/areas-acesso`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        mode: selectedUserAccessRestrictionState.defaultScope?.mode || 'all',
+        areas: selectedUserAccessRestrictionState.defaultScope?.areas || [],
+        profile_ids: profileIds,
+      }),
+    });
+    setUserAccessModalMessage('Usuário atualizado com sucesso.', 'success');
+    await refreshAdminSessionAfterAccessChange(user.id);
+    await loadUsersForCompany();
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
+    await openUserAccessModal(user.id);
+  } catch (error) {
+    setUserAccessModalMessage(error.message, 'error');
+  }
+}
+
+async function revokeSelectedUserAccess() {
+  const user = selectedUserAccessRecord;
+  if (!user || !state.companyId) {
+    setUserAccessModalMessage('Usuário não selecionado.', 'error');
+    return;
+  }
+  const confirmed = window.confirm('Revogar o acesso deste usuário à empresa?');
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${user.id}/acessos`, {
+      method: 'DELETE',
+    });
+    closeUserAccessModal();
+    setUserAdminMessage('Acesso revogado com sucesso.', 'success');
+    await refreshAdminSessionAfterAccessChange(user.id);
+    await loadUsersForCompany();
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
+  } catch (error) {
+    setUserAccessModalMessage(error.message, 'error');
+  }
+}
+
+function openForcePasswordModal() {
+  if (!forcePasswordModal) {
+    return;
+  }
+  if (forcePasswordNew) forcePasswordNew.value = '';
+  if (forcePasswordConfirm) forcePasswordConfirm.value = '';
+  setForcePasswordMessage('');
+  forcePasswordModal.setAttribute('aria-hidden', 'false');
+  forcePasswordModal.classList.add('open');
+}
+
+function closeForcePasswordModal() {
+  if (!forcePasswordModal) {
+    return;
+  }
+  forcePasswordModal.classList.remove('open');
+  forcePasswordModal.setAttribute('aria-hidden', 'true');
+}
+
+async function submitForcedPasswordChange() {
+  const newPassword = forcePasswordNew?.value || '';
+  const confirmPassword = forcePasswordConfirm?.value || '';
+  if (!newPassword || newPassword.length < 8) {
+    setForcePasswordMessage('A nova senha deve ter pelo menos 8 caracteres.', 'error');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    setForcePasswordMessage('A confirmação da senha não confere.', 'error');
+    return;
+  }
+  try {
+    await apiFetch('/api/v1/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ new_password: newPassword }),
+    });
+    await loadUserSession(true);
+    closeForcePasswordModal();
+    showToast('Senha alterada com sucesso.');
+  } catch (error) {
+    setForcePasswordMessage(error.message, 'error');
+  }
+}
+
+function renderAreaAccessUserOptions() {
+  if (!areaAccessUserSelect) {
+    return;
+  }
+  const previousValue = areaAccessUserSelect.value;
+  areaAccessUserSelect.innerHTML = '<option value="">Selecione um usuário</option>';
+  (companyUsersCache || []).forEach((user) => {
+    const option = document.createElement('option');
+    option.value = String(user.id || '');
+    option.textContent = `${user.full_name || user.email || 'usuário'} · ${user.email || '-'}`;
+    areaAccessUserSelect.appendChild(option);
+  });
+  const fallbackValue = previousValue || String(companyUsersCache?.[0]?.id || '');
+  if ([...areaAccessUserSelect.options].some((option) => option.value === fallbackValue)) {
+    areaAccessUserSelect.value = fallbackValue;
+  }
+}
+
+function renderAreaAccessChecklist() {
+  if (!areaAccessChecklist) {
+    return;
+  }
+  const selectedUser = getUserByIdFromCache(areaAccessUserSelect?.value);
+  const isAdminTarget = hasRole('admin', selectedUser);
+  const mode = areaAccessMode?.value || 'all';
+  const disabled = isAdminTarget || mode !== 'selected';
+  const areas = Array.isArray(areaAccessState.availableAreas) ? areaAccessState.availableAreas : [];
+  if (!areas.length) {
+    areaAccessChecklist.innerHTML = '<span class="helper">Nenhuma área disponível para configurar.</span>';
+    return;
+  }
+  areaAccessChecklist.innerHTML = '';
+  areas.forEach((area) => {
+    const label = document.createElement('label');
+    label.className = 'user-access-role';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = area;
+    input.checked = areaAccessState.selectedAreas.includes(area);
+    input.disabled = disabled;
+    const span = document.createElement('span');
+    span.textContent = area === FALLBACK_AREA ? 'sem-area' : area;
+    label.appendChild(input);
+    label.appendChild(span);
+    areaAccessChecklist.appendChild(label);
+  });
+  if (isAdminTarget) {
+    setAreaAccessMessage('Administradores sempre possuem acesso total às áreas.', 'success');
+  }
+}
+
+function renderAreaRestrictionProfileChecklist() {
+  if (!areaRestrictionProfileChecklist) {
+    return;
+  }
+  const areas = Array.isArray(areaAccessState.availableAreas) ? areaAccessState.availableAreas : [];
+  if (!areas.length) {
+    areaRestrictionProfileChecklist.innerHTML = '<span class="helper">Nenhuma área disponível para perfis.</span>';
+    return;
+  }
+  areaRestrictionProfileChecklist.innerHTML = '';
+  areas.forEach((area) => {
+    const label = document.createElement('label');
+    label.className = 'user-access-role';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = area;
+    const span = document.createElement('span');
+    span.textContent = area === FALLBACK_AREA ? 'sem-area' : area;
+    label.appendChild(input);
+    label.appendChild(span);
+    areaRestrictionProfileChecklist.appendChild(label);
+  });
+}
+
+function renderAreaAccessProfiles() {
+  if (!areaAccessProfilesList) {
+    return;
+  }
+  const selectedUser = getUserByIdFromCache(areaAccessUserSelect?.value);
+  const isAdminTarget = hasRole('admin', selectedUser);
+  const profiles = Array.isArray(areaAccessState.profiles) ? areaAccessState.profiles : [];
+  if (!profiles.length) {
+    areaAccessProfilesList.innerHTML = '<span class="helper">Nenhum perfil reutilizável cadastrado.</span>';
+    return;
+  }
+  areaAccessProfilesList.innerHTML = '';
+  profiles.forEach((profile) => {
+    const label = document.createElement('label');
+    label.className = 'area-profile-card';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = String(profile.id || '');
+    input.checked = (areaAccessState.assignedProfileIds || []).includes(Number(profile.id));
+    input.disabled = isAdminTarget;
+    const content = document.createElement('div');
+    content.className = 'area-profile-card__content';
+    const title = document.createElement('strong');
+    title.textContent = profile.name || `perfil ${profile.id}`;
+    const meta = document.createElement('small');
+    meta.textContent = (profile.areas || []).length ? (profile.areas || []).join(', ') : 'sem áreas';
+    content.appendChild(title);
+    if (profile.description) {
+      const desc = document.createElement('small');
+      desc.textContent = profile.description;
+      content.appendChild(desc);
+    }
+    content.appendChild(meta);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'ghost area-profile-remove';
+    removeBtn.dataset.profileId = String(profile.id || '');
+    removeBtn.textContent = 'Excluir perfil';
+    label.appendChild(input);
+    label.appendChild(content);
+    label.appendChild(removeBtn);
+    areaAccessProfilesList.appendChild(label);
+  });
+}
+
+function collectAreaAccessSelection() {
+  if (!areaAccessChecklist) {
+    return [];
+  }
+  return Array.from(areaAccessChecklist.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => input.value || '')
+    .filter(Boolean);
+}
+
+function collectAssignedAreaProfileIds() {
+  if (!areaAccessProfilesList) {
+    return [];
+  }
+  return Array.from(areaAccessProfilesList.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => Number(input.value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+}
+
+function collectAreaRestrictionProfileAreas() {
+  if (!areaRestrictionProfileChecklist) {
+    return [];
+  }
+  return Array.from(areaRestrictionProfileChecklist.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => input.value || '')
+    .filter(Boolean);
+}
+
+async function loadSelectedUserAreaScope() {
+  const userId = Number(areaAccessUserSelect?.value || 0);
+  if (!userId || !state.companyId) {
+    areaAccessState = {
+      availableAreas: [],
+      selectedAreas: [],
+      profiles: [],
+      assignedProfileIds: [],
+      effectiveScope: { mode: 'all', areas: [] },
+    };
+    renderAreaAccessChecklist();
+    renderAreaAccessProfiles();
+    renderAreaRestrictionProfileChecklist();
+    return;
+  }
+  try {
+    const payload = await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${userId}/areas-acesso`);
+    areaAccessState = {
+      availableAreas: payload?.available_areas || [],
+      selectedAreas: payload?.scope?.areas || [],
+      profiles: payload?.profiles || [],
+      assignedProfileIds: (payload?.assigned_profile_ids || []).map((item) => Number(item)),
+      effectiveScope: payload?.effective_scope || { mode: 'all', areas: [] },
+    };
+    if (areaAccessMode) {
+      areaAccessMode.value = payload?.scope?.mode || 'all';
+    }
+    if (!hasRole('admin', getUserByIdFromCache(userId))) {
+      setAreaAccessMessage('');
+    }
+    renderAreaAccessChecklist();
+    renderAreaAccessProfiles();
+    renderAreaRestrictionProfileChecklist();
+  } catch (error) {
+    areaAccessState = { availableAreas: [], selectedAreas: [], profiles: [], assignedProfileIds: [], effectiveScope: { mode: 'all', areas: [] } };
+    renderAreaAccessChecklist();
+    renderAreaAccessProfiles();
+    renderAreaRestrictionProfileChecklist();
+    setAreaAccessMessage(error.message, 'error');
+  }
+}
+
+async function openAreaAccessSession(preferredUserId = null) {
+  showSession('userAreaAccessSession');
+  setAreaAccessMessage('');
+  setAreaRestrictionProfileMessage('');
+  await loadUsersForCompany();
+  renderAreaAccessUserOptions();
+  if (preferredUserId && areaAccessUserSelect) {
+    const preferred = String(preferredUserId);
+    if ([...areaAccessUserSelect.options].some((option) => option.value === preferred)) {
+      areaAccessUserSelect.value = preferred;
+    }
+  }
+  await loadSelectedUserAreaScope();
+  hideUserMenu();
+}
+
+async function saveAreaAccessScope() {
+  const userId = Number(areaAccessUserSelect?.value || 0);
+  if (!userId || !state.companyId) {
+    setAreaAccessMessage('Selecione um usuário para configurar o acesso.', 'error');
+    return;
+  }
+  const targetUser = getUserByIdFromCache(userId);
+  if (hasRole('admin', targetUser)) {
+    setAreaAccessMessage('Administradores não podem ter restrição de área.', 'error');
+    return;
+  }
+  const mode = areaAccessMode?.value || 'all';
+  const selectedAreas = collectAreaAccessSelection();
+  const profileIds = collectAssignedAreaProfileIds();
+  if (mode === 'selected' && !selectedAreas.length) {
+    setAreaAccessMessage('Selecione ao menos uma área quando o modo for restrito.', 'error');
+    return;
+  }
+  try {
+    await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${userId}/areas-acesso`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode, areas: selectedAreas, profile_ids: profileIds }),
+    });
+    setAreaAccessMessage('Restrição de áreas atualizada com sucesso.', 'success');
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
+    await loadSelectedUserAreaScope();
+  } catch (error) {
+    setAreaAccessMessage(error.message, 'error');
+  }
+}
+
+async function createAreaRestrictionProfile(event) {
+  event.preventDefault();
+  if (!state.companyId) {
+    setAreaRestrictionProfileMessage('Empresa não identificada.', 'error');
+    return;
+  }
+  const name = areaRestrictionProfileName?.value?.trim() || '';
+  const description = areaRestrictionProfileDescription?.value?.trim() || '';
+  const areas = collectAreaRestrictionProfileAreas();
+  if (!name) {
+    setAreaRestrictionProfileMessage('Informe um nome para o perfil.', 'error');
+    return;
+  }
+  if (!areas.length) {
+    setAreaRestrictionProfileMessage('Selecione ao menos uma área para o perfil.', 'error');
+    return;
+  }
+  try {
+    await apiFetch(`/api/v1/empresas/${state.companyId}/perfis-restricao-areas`, {
+      method: 'POST',
+      body: JSON.stringify({ name, description, areas }),
+    });
+    if (areaRestrictionProfileName) areaRestrictionProfileName.value = '';
+    if (areaRestrictionProfileDescription) areaRestrictionProfileDescription.value = '';
+    areaRestrictionProfileChecklist?.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.checked = false;
+    });
+    setAreaRestrictionProfileMessage('Perfil de restrição criado com sucesso.', 'success');
+    await loadSelectedUserAreaScope();
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
+    await loadUsersForCompany();
+  } catch (error) {
+    setAreaRestrictionProfileMessage(error.message, 'error');
+  }
+}
+
+async function deleteAreaRestrictionProfile(profileId) {
+  if (!state.companyId || !profileId) {
+    return;
+  }
+  const confirmed = window.confirm('Excluir este perfil reutilizável de restrição?');
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await apiFetch(`/api/v1/empresas/${state.companyId}/perfis-restricao-areas/${profileId}`, {
+      method: 'DELETE',
+    });
+    setAreaAccessMessage('Perfil reutilizável removido com sucesso.', 'success');
+    await loadSelectedUserAreaScope();
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
+    await loadUsersForCompany();
+  } catch (error) {
+    setAreaAccessMessage(error.message, 'error');
+  }
+}
+
+function exportUserAuditCsv() {
+  const items = Array.isArray(companyUserAuditCache) ? companyUserAuditCache : [];
+  if (!items.length) {
+    showToast('Não há auditoria para exportar.', 'error');
+    return;
+  }
+  const lines = [
+    ['acao', 'alvo_nome', 'alvo_email', 'ator_nome', 'ator_email', 'perfis', 'observacao', 'criado_em']
+      .map(escapeCsvValue)
+      .join(','),
+  ];
+  items.forEach((item) => {
+    lines.push([
+      formatAuditActionLabel(item),
+      item.target_name || '',
+      item.target_email || '',
+      item.actor_name || '',
+      item.actor_email || '',
+      Array.isArray(item.roles) ? item.roles.join('; ') : '',
+      item.note || '',
+      item.created_at || '',
+    ].map(escapeCsvValue).join(','));
+  });
+  const companyLabel = String(state.companyId || 'empresa');
+  downloadTextFile(`auditoria-acessos-empresa-${companyLabel}.csv`, `${lines.join('\n')}\n`, 'text/csv;charset=utf-8');
+}
+
+async function loadAreaRestrictionProfilesCatalog() {
+  if (!isAccessControlEnabled() || !state.companyId || !isAdminProfile()) {
+    areaRestrictionProfilesCatalog = [];
+    newUserAssignedRestrictionProfileIds = [];
+    renderNewUserRestrictionDropdown();
+    return;
+  }
+  try {
+    const payload = await apiFetch(`/api/v1/empresas/${state.companyId}/perfis-restricao-areas`);
+    areaRestrictionProfilesCatalog = Array.isArray(payload?.items) ? payload.items : [];
+    newUserAssignedRestrictionProfileIds = newUserAssignedRestrictionProfileIds
+      .filter((profileId) => areaRestrictionProfilesCatalog.some((profile) => Number(profile.id) === Number(profileId)));
+    renderNewUserRestrictionDropdown();
+  } catch (_error) {
+    areaRestrictionProfilesCatalog = [];
+    newUserAssignedRestrictionProfileIds = [];
+    renderNewUserRestrictionDropdown();
+  }
 }
 
 function toggleAdminMenuVisibility() {
@@ -541,7 +1567,14 @@ function toggleAdminMenuVisibility() {
       userAdminMenuItem.classList.add('hidden-view');
       userAdminMenuItem.setAttribute('aria-hidden', 'true');
     }
+    if (userAreaAccessMenuItem) {
+      userAreaAccessMenuItem.classList.add('hidden-view');
+      userAreaAccessMenuItem.setAttribute('aria-hidden', 'true');
+    }
     if (userAdminSession && userAdminSession.classList.contains('active-session')) {
+      showSession('dashboardSession');
+    }
+    if (userAreaAccessSession && userAreaAccessSession.classList.contains('active-session')) {
       showSession('dashboardSession');
     }
     return;
@@ -550,7 +1583,14 @@ function toggleAdminMenuVisibility() {
     userAdminMenuItem.classList.toggle('hidden-view', !isAdminProfile());
     userAdminMenuItem.setAttribute('aria-hidden', String(!isAdminProfile()));
   }
+  if (userAreaAccessMenuItem) {
+    userAreaAccessMenuItem.classList.toggle('hidden-view', !isAdminProfile());
+    userAreaAccessMenuItem.setAttribute('aria-hidden', String(!isAdminProfile()));
+  }
   if (userAdminSession && !isAdminProfile() && userAdminSession.classList.contains('active-session')) {
+    showSession('dashboardSession');
+  }
+  if (userAreaAccessSession && !isAdminProfile() && userAreaAccessSession.classList.contains('active-session')) {
     showSession('dashboardSession');
   }
 }
@@ -560,25 +1600,157 @@ async function loadUsersForCompany() {
     if (usersList) {
       usersList.innerHTML = 'Acesso a usuários indisponível no modo sem autenticação.';
     }
+    areaRestrictionProfilesCatalog = [];
+    newUserAssignedRestrictionProfileIds = [];
+    renderNewUserRestrictionDropdown();
     return;
   }
   if (!state.companyId || !isAdminProfile()) {
     if (usersList) {
       usersList.innerHTML = '<li>Sem permissão para visualizar usuários.</li>';
     }
+    areaRestrictionProfilesCatalog = [];
+    newUserAssignedRestrictionProfileIds = [];
+    renderNewUserRestrictionDropdown();
     return;
   }
   try {
     const users = await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios`);
-    renderUsersList(users || []);
-    if (userAdminMsg) {
-      userAdminMsg.textContent = '';
-      userAdminMsg.className = 'helper';
-    }
+    companyUsersCache = users || [];
+    usersPagination.page = 1;
+    renderUsersList(companyUsersCache);
   } catch (error) {
     if (usersList) {
       usersList.innerHTML = `<li>${error.message}</li>`;
     }
+  } finally {
+    await loadAreaRestrictionProfilesCatalog();
+  }
+}
+
+async function loadUserAccessAudit() {
+  if (!isAccessControlEnabled() || !state.companyId || !isAdminProfile()) {
+    if (userAuditList) {
+      userAuditList.innerHTML = '<li>Sem permissão para visualizar auditoria.</li>';
+    }
+    companyUserAuditCache = [];
+    userAuditPagination.total = 0;
+    updateUserAuditPager();
+    return;
+  }
+  try {
+    const offset = (Math.max(1, userAuditPagination.page) - 1) * userAuditPagination.limit;
+    const payload = await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/auditoria?limit=${userAuditPagination.limit}&offset=${offset}`);
+    companyUserAuditCache = Array.isArray(payload?.items) ? payload.items : [];
+    userAuditPagination.total = Number.isFinite(Number(payload?.total)) ? Number(payload.total) : companyUserAuditCache.length;
+    renderUserAuditList(companyUserAuditCache);
+    updateUserAuditPager();
+  } catch (error) {
+    if (userAuditList) {
+      userAuditList.innerHTML = `<li>${error.message}</li>`;
+    }
+    companyUserAuditCache = [];
+    userAuditPagination.total = 0;
+    updateUserAuditPager();
+  }
+}
+
+function getRolesFromUserCard(card) {
+  return Array.from(card.querySelectorAll('input[type="checkbox"][data-role]:checked'))
+    .map((input) => input.dataset.role || '')
+    .filter(Boolean);
+}
+
+function setUserCardBusy(card, busy = true) {
+  if (!card) {
+    return;
+  }
+  card.classList.toggle('is-busy', busy);
+  const controls = card.querySelectorAll('input, button');
+  controls.forEach((control) => {
+    control.disabled = busy;
+  });
+}
+
+async function refreshAdminSessionAfterAccessChange(targetUserId) {
+  if (!state.profile || Number(targetUserId) !== Number(state.profile.user_id)) {
+    return;
+  }
+  await loadUserSession(true);
+  if (!isAdminProfile()) {
+    showSession('dashboardSession');
+  }
+}
+
+async function saveUserAccessFromCard(card) {
+  const userId = Number(card?.dataset?.userId || 0);
+  if (!userId || !state.companyId) {
+    showToast('Não foi possível identificar o usuário.', 'error');
+    return;
+  }
+  const roles = getRolesFromUserCard(card);
+  const fullName = card.querySelector('.user-access-name')?.value?.trim() || '';
+  const password = card.querySelector('.user-access-password')?.value || '';
+  if (!roles.length) {
+    setUserAdminMessage('Selecione ao menos um perfil ou use "Remover acesso".', 'error');
+    return;
+  }
+  if (!fullName) {
+    setUserAdminMessage('Informe um nome válido para o usuário.', 'error');
+    return;
+  }
+
+  setUserCardBusy(card, true);
+  try {
+    await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${userId}/acessos`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        roles,
+        full_name: fullName,
+        password,
+      }),
+    });
+    setUserAdminMessage('Acessos atualizados com sucesso.', 'success');
+    await refreshAdminSessionAfterAccessChange(userId);
+    await loadUsersForCompany();
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
+  } catch (error) {
+    setUserAdminMessage(error.message, 'error');
+  } finally {
+    const passwordInput = card.querySelector('.user-access-password');
+    if (passwordInput) {
+      passwordInput.value = '';
+    }
+    setUserCardBusy(card, false);
+  }
+}
+
+async function revokeUserAccessFromCard(card) {
+  const userId = Number(card?.dataset?.userId || 0);
+  if (!userId || !state.companyId) {
+    showToast('Não foi possível identificar o usuário.', 'error');
+    return;
+  }
+
+  setUserCardBusy(card, true);
+  try {
+    const confirmed = window.confirm('Remover o acesso deste usuário à empresa?');
+    if (!confirmed) {
+      return;
+    }
+    await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${userId}/acessos`, {
+      method: 'DELETE',
+    });
+    setUserAdminMessage('Acesso removido com sucesso.', 'success');
+    await refreshAdminSessionAfterAccessChange(userId);
+    await loadUsersForCompany();
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
+  } catch (error) {
+    setUserAdminMessage(error.message, 'error');
+  } finally {
+    setUserCardBusy(card, false);
   }
 }
 
@@ -686,6 +1858,7 @@ const sessions = {
   profileSession: document.getElementById('profileSession'),
   taxonomySession: document.getElementById('taxonomySession'),
   userAdminSession: document.getElementById('userAdminSession'),
+  userAreaAccessSession: document.getElementById('userAreaAccessSession'),
   publishSession: document.getElementById('publishSession'),
 };
 
@@ -708,8 +1881,8 @@ function showInlineCreateSession(show = true) {
 }
 
 function showSession(sessionId) {
-  if (sessionId === 'userAdminSession' && !isAdminProfile()) {
-    showToast('Somente administradores podem acessar a sessão de usuários.', 'error');
+  if ((sessionId === 'userAdminSession' || sessionId === 'userAreaAccessSession') && !isAdminProfile()) {
+    showToast('Somente administradores podem acessar a sessão de gestão de acessos.', 'error');
     sessionId = 'dashboardSession';
   }
 
@@ -731,7 +1904,7 @@ function setStatus(text, ok = true) {
 
 function formatProfileLabel(profile) {
   const name = profile?.full_name || profile?.email || 'usuário';
-  const role = profile?.role || 'sem perfil';
+  const role = formatRoleLabel(profile);
   const company = profile?.company_name || state.defaultCompanyName || `empresa ${state.companyId || '-'}`;
   return `${name} · ${role} · ${company}`;
 }
@@ -764,7 +1937,7 @@ function renderProfileToUi(profile = null) {
     profileEmail.textContent = data.email || '-';
   }
   if (profileRole) {
-    profileRole.textContent = data.role || '-';
+    profileRole.textContent = formatRoleLabel(data);
   }
   if (profileCompany) {
     profileCompany.textContent = data.company_name || '-';
@@ -778,8 +1951,9 @@ function renderProfileToUi(profile = null) {
 }
 
 function setPanelStatusText() {
+  updateCreateDocumentButtonAvailability();
   if (state.profile) {
-    setStatus(formatProfileLabel(state.profile));
+    updateDashboardApprovalStatus();
     renderProfileToUi(state.profile);
     return;
   }
@@ -869,6 +2043,8 @@ function setPanel(authenticated) {
     }
     hideEditHistory();
     selectedDocument = null;
+    closeUserAccessModal();
+    closeForcePasswordModal();
     showInlineCreateSession(false);
     state.taxonomies = { areas: [], categorias: [] };
     renderTaxonomies();
@@ -877,6 +2053,9 @@ function setPanel(authenticated) {
     toggleAdminMenuVisibility();
     if (usersList) {
       usersList.innerHTML = '<li>Sem permissão para visualizar usuários.</li>';
+    }
+    if (userAuditList) {
+      userAuditList.innerHTML = '<li>Sem permissão para visualizar auditoria.</li>';
     }
     setStatus('sem autenticação');
   }
@@ -1044,12 +2223,20 @@ async function loadUserSession(force = false) {
     renderProfileToUi(payload);
     setPanelStatusText();
     toggleAdminMenuVisibility();
+    updatePublishControls();
+    if (payload?.require_password_change) {
+      openForcePasswordModal();
+    } else {
+      closeForcePasswordModal();
+    }
     return payload;
   } catch (error) {
     state.profile = null;
     renderProfileToUi({ full_name: '-', email: '-', role: '-', company_name: '-' });
     setStatus(error.message, false);
     toggleAdminMenuVisibility();
+    updatePublishControls();
+    closeForcePasswordModal();
     return null;
   }
 }
@@ -1229,12 +2416,16 @@ function renderEditHistory(meta) {
 
   for (const item of versions) {
     const publishedTag = item.published ? 'PUBLICADA' : '';
+    const pendingTag = !item.published && isPendingApprovalVersion(item) ? 'PENDENTE APROVACAO' : '';
     const publishedLabel = item.published_at ? `Publicado em ${item.published_at}` : '';
+    const approvalLabel = item.approved_by
+      ? `Aprovado por ${item.approved_by}${item.published_at ? ` em ${item.published_at}` : ''}`
+      : '';
     const title = `v${item.version}`;
     const metaLine = [
       item.author || 'autor não informado',
       item.created_at || '',
-      publishedLabel,
+      approvalLabel || publishedLabel,
     ].join(' · ');
 
     const li = document.createElement('li');
@@ -1254,7 +2445,11 @@ function renderEditHistory(meta) {
       <div class="timeline-main">
         <div class="timeline-main-row">
           <strong>${title}</strong>
-          ${publishedTag ? `<span class="timeline-badge">${publishedTag}</span>` : '<span class="timeline-badge timeline-badge--draft">Rascunho</span>'}
+          ${publishedTag
+            ? `<span class="timeline-badge">${publishedTag}</span>`
+            : pendingTag
+              ? `<span class="timeline-badge timeline-badge--pending">${pendingTag}</span>`
+              : '<span class="timeline-badge timeline-badge--draft">Rascunho</span>'}
         </div>
         <span class="timeline-meta">${metaLine}</span>
       </div>
@@ -1282,9 +2477,12 @@ function renderVersionPreview(version, payload) {
 
   const selected = getHistoryVersion(version);
   const isPublished = selected?.published === true || contentPublishedOf(payload);
+  const isPendingApproval = isPendingApprovalVersion(selected) || isPendingApprovalVersion(payload);
   versionPublishToggle.checked = isPublished;
   versionPublishToggle.disabled = false;
-  publishToggleInfo.textContent = `Publicar versão v${version}`;
+  publishToggleInfo.textContent = isPendingApproval
+    ? `Publicar versão v${version} pendente de aprovação`
+    : `Publicar versão v${version}`;
 }
 
 function loadVersionForEdit(version) {
@@ -1388,7 +2586,8 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
   selectedDocument = doc;
   selectedDocument = { ...selectedDocument, fromHistoryEdit: fromHistory };
   selectedDocument.version = targetVersion || null;
-  const shouldShowPublish = Boolean(showPublishControls);
+  const pendingApproval = isPendingApprovalVersion(doc);
+  const shouldShowPublish = canPublishDocument() && (Boolean(showPublishControls) || pendingApproval || !docIsPublished(doc));
   const versionLabel = targetVersion ? `v${targetVersion}` : '-';
   if (docModalEditBtn) {
     docModalEditBtn.classList.remove('hidden-view');
@@ -1422,14 +2621,21 @@ function openDocumentModalFromPublished(doc, version = null, showPublishControls
       const payloadVersion = contentVersionOf(payload);
       const payloadPublished = contentPublishedOf(payload);
       if (payloadVersion) {
-        selectedDocument = { ...selectedDocument, version: payloadVersion, published: payloadPublished };
+        selectedDocument = {
+          ...selectedDocument,
+          version: payloadVersion,
+          published: payloadPublished,
+          pending_approval: isPendingApprovalVersion(payload),
+        };
         docModalMeta.textContent = `${doc.area} / ${doc.categoria} · v${payloadVersion} · ${payload.updated_at || doc.updated_at || ''}${formatValidityMeta(payload?.data_validade || doc?.data_validade)}`;
         if (modalVersionPublishToggle) {
           modalVersionPublishToggle.checked = payloadPublished;
           modalVersionPublishToggle.disabled = !shouldShowPublish;
         }
         if (modalPublishToggleInfo) {
-          modalPublishToggleInfo.textContent = `Publicar versão v${payloadVersion}`;
+          modalPublishToggleInfo.textContent = isPendingApprovalVersion(payload)
+            ? `Publicar versão v${payloadVersion} pendente de aprovação`
+            : `Publicar versão v${payloadVersion}`;
         }
       }
       const payloadTitle = docTitleOf(payload);
@@ -1559,6 +2765,7 @@ function openCreateForSelectedDocument() {
   if (validityTarget) {
     validityTarget.value = selectedDocument.data_validade || '';
   }
+  updatePublishControls();
   const fileInput = document.getElementById('docFile');
   if (fileInput) {
     fileInput.value = '';
@@ -1615,6 +2822,21 @@ function showToast(message, type = 'success') {
     toast.classList.remove('show');
     window.setTimeout(() => toast.remove(), 250);
   }, 2800);
+}
+
+function updatePublishControls() {
+  const docPublish = document.getElementById('docPublish');
+  if (!docPublish) {
+    return;
+  }
+  const allowed = canPublishDocument();
+  docPublish.disabled = !allowed;
+  if (!allowed) {
+    docPublish.checked = false;
+    docPublish.title = 'Somente aprovadores ou administradores podem publicar documentos.';
+  } else {
+    docPublish.title = 'Publicar documento';
+  }
 }
 
 function parseTags(value) {
@@ -2022,10 +3244,174 @@ if (userAdminMenuItem) {
       return;
     }
     showSession('userAdminSession');
+    setUserAdminMessage('');
     await loadUsersForCompany();
+    resetUserAuditPagination();
+    await loadUserAccessAudit();
     hideUserMenu();
   });
 }
+
+if (userAreaAccessMenuItem) {
+  userAreaAccessMenuItem.addEventListener('click', async () => {
+    if (!isAccessControlEnabled()) {
+      showToast('Sessão de áreas desativada no modo sem autenticação.', 'error');
+      hideUserMenu();
+      return;
+    }
+    if (!isAdminProfile()) {
+      showToast('Acesso restrito a administradores.', 'error');
+      return;
+    }
+    await openAreaAccessSession();
+  });
+}
+
+userAccessModalOverlay?.addEventListener('click', closeUserAccessModal);
+userAccessModalCloseBtn?.addEventListener('click', closeUserAccessModal);
+newUserRestrictionTrigger?.addEventListener('click', () => {
+  if (!newUserRestrictionDropdown || newUserRestrictionTrigger.disabled) {
+    return;
+  }
+  closeUserAccessRestrictionDropdown();
+  const nextOpen = newUserRestrictionDropdown.classList.contains('hidden-view');
+  newUserRestrictionDropdown.classList.toggle('hidden-view', !nextOpen);
+  newUserRestrictionTrigger.setAttribute('aria-expanded', String(nextOpen));
+});
+newUserRestrictionDropdown?.addEventListener('change', () => {
+  newUserAssignedRestrictionProfileIds = collectNewUserRestrictionProfileIds();
+  updateNewUserRestrictionTriggerLabel();
+});
+userAccessModalRestrictionTrigger?.addEventListener('click', () => {
+  if (!userAccessModalRestrictionDropdown) {
+    return;
+  }
+  closeNewUserRestrictionDropdown();
+  const nextOpen = userAccessModalRestrictionDropdown.classList.contains('hidden-view');
+  userAccessModalRestrictionDropdown.classList.toggle('hidden-view', !nextOpen);
+  userAccessModalRestrictionTrigger.setAttribute('aria-expanded', String(nextOpen));
+});
+userAccessModalRestrictionDropdown?.addEventListener('change', () => {
+  selectedUserAccessRestrictionState.assignedProfileIds = collectUserAccessRestrictionProfileIds();
+  updateUserAccessRestrictionTriggerLabel();
+});
+userAccessModalSave?.addEventListener('click', () => {
+  void saveSelectedUserAccess();
+});
+userAccessModalRevoke?.addEventListener('click', () => {
+  void revokeSelectedUserAccess();
+});
+userAccessModalOpenAreas?.addEventListener('click', () => {
+  void openSelectedUserAreaRestrictions();
+});
+document.addEventListener('click', (event) => {
+  if (
+    newUserRestrictionDropdown
+    && newUserRestrictionTrigger
+    && !newUserRestrictionDropdown.classList.contains('hidden-view')
+    && !newUserRestrictionDropdown.contains(event.target)
+    && !newUserRestrictionTrigger.contains(event.target)
+  ) {
+    closeNewUserRestrictionDropdown();
+  }
+  if (
+    userAccessModalRestrictionDropdown
+    && userAccessModalRestrictionTrigger
+    && !userAccessModalRestrictionDropdown.classList.contains('hidden-view')
+    && !userAccessModalRestrictionDropdown.contains(event.target)
+    && !userAccessModalRestrictionTrigger.contains(event.target)
+  ) {
+    closeUserAccessRestrictionDropdown();
+  }
+});
+
+if (userAccessStatusFilter) {
+  userAccessStatusFilter.addEventListener('change', () => {
+    usersPagination.page = 1;
+    renderUsersList(companyUsersCache);
+  });
+}
+
+if (userAccessSearch) {
+  userAccessSearch.addEventListener('input', () => {
+    usersPagination.page = 1;
+    renderUsersList(companyUsersCache);
+  });
+}
+
+if (userAccessSort) {
+  userAccessSort.addEventListener('change', () => {
+    usersPagination.page = 1;
+    renderUsersList(companyUsersCache);
+});
+}
+
+areaAccessUserSelect?.addEventListener('change', () => {
+  void loadSelectedUserAreaScope();
+});
+
+areaAccessMode?.addEventListener('change', () => {
+  renderAreaAccessChecklist();
+});
+
+saveAreaAccessBtn?.addEventListener('click', () => {
+  void saveAreaAccessScope();
+});
+
+forcePasswordSave?.addEventListener('click', () => {
+  void submitForcedPasswordChange();
+});
+
+createAreaRestrictionProfileForm?.addEventListener('submit', (event) => {
+  void createAreaRestrictionProfile(event);
+});
+
+areaAccessProfilesList?.addEventListener('click', (event) => {
+  const removeButton = event.target.closest('.area-profile-remove');
+  if (!removeButton) {
+    return;
+  }
+  const profileId = Number(removeButton.dataset.profileId || 0);
+  void deleteAreaRestrictionProfile(profileId);
+});
+
+userAuditExportButton?.addEventListener('click', () => {
+  exportUserAuditCsv();
+});
+
+userAuditPrevButton?.addEventListener('click', () => {
+  if (userAuditPagination.page <= 1) {
+    return;
+  }
+  userAuditPagination.page -= 1;
+  void loadUserAccessAudit();
+});
+
+userAuditNextButton?.addEventListener('click', () => {
+  const totalPages = Math.max(1, Math.ceil(userAuditPagination.total / userAuditPagination.limit));
+  if (userAuditPagination.page >= totalPages) {
+    return;
+  }
+  userAuditPagination.page += 1;
+  void loadUserAccessAudit();
+});
+
+usersPrevButton?.addEventListener('click', () => {
+  if (usersPagination.page <= 1) {
+    return;
+  }
+  usersPagination.page -= 1;
+  renderUsersList(companyUsersCache);
+});
+
+usersNextButton?.addEventListener('click', () => {
+  const totalPages = Math.max(1, Math.ceil(usersPagination.total / usersPagination.limit));
+  if (usersPagination.page >= totalPages) {
+    return;
+  }
+  usersPagination.page += 1;
+  renderUsersList(companyUsersCache);
+});
 
 async function loadPublishedDocs() {
   const area = filterArea?.value || '';
@@ -2064,15 +3450,22 @@ async function loadPublishedDocs() {
   };
 
   try {
+    const canLoadUploadQueue = canViewUploadQueue();
     const [data, processingData, failedData] = await Promise.all([
       apiFetch(`/api/v1/empresas/${state.companyId}/documentos?${query.toString()}`),
-      apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=processing`),
-      apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=failed`),
+      canLoadUploadQueue
+        ? apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=processing`)
+        : Promise.resolve({ documentos: [] }),
+      canLoadUploadQueue
+        ? apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=failed`)
+        : Promise.resolve({ documentos: [] }),
     ]);
     docsList.innerHTML = '';
     const processingDocs = (Array.isArray(processingData?.documentos) ? processingData.documentos : []).filter(matchesDashboardFilters);
     const failedDocs = (Array.isArray(failedData?.documentos) ? failedData.documentos : []).filter(matchesDashboardFilters);
     const listedDocs = Array.isArray(data?.documentos) ? data.documentos : [];
+    state.pendingApprovalTotal = Number.isFinite(Number(data?.pending_total)) ? Number(data.pending_total) : 0;
+    updateDashboardApprovalStatus();
     pagination.total = Number.isFinite(Number(data?.total)) ? Number(data.total) : listedDocs.length;
     const publishedOffset = Math.max(0, offset);
     const pageFromOffset = Math.floor(publishedOffset / clampedLimit) + 1;
@@ -2124,6 +3517,9 @@ async function loadPublishedDocs() {
         : '';
       const draftBadge = doc?._cardType === 'draft'
         ? '<span class="status-tag status-tag-draft">Rascunho</span>'
+        : '';
+      const pendingBadge = isPendingApprovalVersion(doc)
+        ? '<span class="status-tag status-tag-pending">Pendente aprovacao</span>'
         : '';
       const item = document.createElement('li');
       if (doc._cardType === 'processing') {
@@ -2177,6 +3573,7 @@ async function loadPublishedDocs() {
               <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
               ${validityBadge}
               ${draftBadge}
+              ${pendingBadge}
               ${tagChips}${tagsOverflow}
             </div>
           </div>
@@ -2213,7 +3610,7 @@ async function loadPublishedDocs() {
       } else if (!doc?.slug) {
         deleteButton.title = 'Documento sem identificador para exclusão.';
       } else if (!canDeleteDocumentCard()) {
-        deleteButton.title = 'Somente administradores podem excluir documentos.';
+        deleteButton.title = 'Somente editores ou administradores podem excluir documentos.';
       } else {
         deleteButton.title = 'Excluir documento';
         deleteButton.addEventListener('click', async (event) => {
@@ -2231,11 +3628,19 @@ async function loadPublishedDocs() {
       docsList.appendChild(item);
     }
   } catch (error) {
+    state.pendingApprovalTotal = 0;
+    updateDashboardApprovalStatus();
     docsList.innerHTML = `<li>${error.message}</li>`;
   }
 }
 
 function showDashboardCreateFlow() {
+  if (!canCreateNewDocument()) {
+    showToast('Somente editores ou administradores podem criar novos documentos.', 'error');
+    showSession('dashboardSession');
+    createSession?.classList.add('hidden-view');
+    return;
+  }
   selectedDocument = null;
   editingDocumentContext = null;
   editingHistoryVersions = [];
@@ -2264,6 +3669,7 @@ function showDashboardCreateFlow() {
   if (docFile) docFile.value = '';
   if (docContent) docContent.value = '';
   if (docPublish) docPublish.checked = true;
+  updatePublishControls();
 
   showInlineCreateSession(true);
   if (createSession) {
@@ -2272,7 +3678,7 @@ function showDashboardCreateFlow() {
   showToast('Preencha os campos para publicar um novo documento.');
 }
 
-document.getElementById('refreshDocs').addEventListener('click', showDashboardCreateFlow);
+refreshDocsButton?.addEventListener('click', showDashboardCreateFlow);
 
 document.getElementById('createDocForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -2540,17 +3946,11 @@ if (addUserForm) {
   addUserForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!isAccessControlEnabled()) {
-      if (userAdminMsg) {
-        userAdminMsg.textContent = 'Usuário anônimo não pode criar usuários nesse modo.';
-        userAdminMsg.className = 'helper error';
-      }
+      setUserAdminMessage('Usuário anônimo não pode criar usuários nesse modo.', 'error');
       return;
     }
     if (!isAdminProfile()) {
-      if (userAdminMsg) {
-        userAdminMsg.textContent = 'Apenas administradores podem cadastrar usuários.';
-        userAdminMsg.className = 'helper error';
-      }
+      setUserAdminMessage('Apenas administradores podem cadastrar usuários.', 'error');
       return;
     }
 
@@ -2558,20 +3958,15 @@ if (addUserForm) {
     const email = newUserEmail?.value?.trim() || '';
     const password = newUserPassword?.value || '';
     const role = newUserRole?.value || '';
+    const profile_ids = collectNewUserRestrictionProfileIds();
 
-    if (!full_name || !email || !password || !role) {
-      if (userAdminMsg) {
-        userAdminMsg.textContent = 'Preencha nome, e-mail, senha e perfil.';
-        userAdminMsg.className = 'helper error';
-      }
+    if (!full_name || !email || !role) {
+      setUserAdminMessage('Preencha nome, e-mail e perfil.', 'error');
       return;
     }
 
     if (!state.companyId) {
-      if (userAdminMsg) {
-        userAdminMsg.textContent = 'Empresa não identificada.';
-        userAdminMsg.className = 'helper error';
-      }
+      setUserAdminMessage('Empresa não identificada.', 'error');
       return;
     }
 
@@ -2583,23 +3978,33 @@ if (addUserForm) {
           email,
           password,
           role,
+          profile_ids,
         }),
       });
       if (newUserName) newUserName.value = '';
       if (newUserEmail) newUserEmail.value = '';
       if (newUserPassword) newUserPassword.value = '';
       if (newUserRole) newUserRole.value = '';
-      if (userAdminMsg) {
-        userAdminMsg.textContent = 'Usuário cadastrado com sucesso.';
-        userAdminMsg.className = 'helper success';
-      }
+      newUserAssignedRestrictionProfileIds = [];
+      closeNewUserRestrictionDropdown();
+      renderNewUserRestrictionDropdown();
+      setUserAdminMessage('Usuário criado ou vinculado com sucesso.', 'success');
       await loadUsersForCompany();
+      resetUserAuditPagination();
+      await loadUserAccessAudit();
     } catch (error) {
-      if (userAdminMsg) {
-        userAdminMsg.textContent = error.message;
-        userAdminMsg.className = 'helper error';
-      }
+      setUserAdminMessage(error.message, 'error');
     }
+  });
+}
+
+if (usersList) {
+  usersList.addEventListener('click', async (event) => {
+    const card = event.target.closest('.user-access-list-item');
+    if (!card) {
+      return;
+    }
+    await openUserAccessModal(card.dataset.userId);
   });
 }
 

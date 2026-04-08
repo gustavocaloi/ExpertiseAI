@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import db, services
 from .config import ACCESS_CONTROL_ENABLED, DATA_DIR
-from .security import TokenData, require_company_access, require_role
+from .security import TokenData, require_company_access, require_role, user_has_required_role
 
 
 router = APIRouter()
@@ -62,6 +62,30 @@ def _is_scoped_access_allowed(company_id: int, user: TokenData) -> None:
 
 def _author_email(user: TokenData) -> str:
     return "anônimo" if not ACCESS_CONTROL_ENABLED else (user.email or "anônimo")
+
+
+def _can_publish(user: TokenData) -> bool:
+    if not ACCESS_CONTROL_ENABLED:
+        return True
+    return user_has_required_role(user, "admin", "aprovador")
+
+
+def _allowed_areas_for_user(company_id: int, user: TokenData) -> Optional[set[str]]:
+    if not ACCESS_CONTROL_ENABLED or user_has_required_role(user, "admin"):
+        return None
+    scope = db.get_effective_user_area_scope(user.user_id, company_id).get("effective_scope", {})
+    if scope.get("mode") != "selected":
+        return None
+    return {services._sanitize(area) for area in (scope.get("areas") or []) if str(area or "").strip()}
+
+
+def _assert_area_access(company_id: int, user: TokenData, area: Optional[str]) -> None:
+    allowed_areas = _allowed_areas_for_user(company_id, user)
+    if allowed_areas is None:
+        return
+    normalized_area = services._sanitize(area or services.DEFAULT_AREA)
+    if normalized_area not in allowed_areas:
+        raise HTTPException(status_code=403, detail="Usuário sem acesso à área informada.")
 
 
 def _upload_job_path(job_id: str) -> Path:
@@ -255,6 +279,9 @@ def list_documents(
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
+    allowed_areas = _allowed_areas_for_user(company_id, user)
+    if area is not None:
+        _assert_area_access(company_id, user, area)
     payload = services.read_published_documents(
         company_id=company_id,
         area=area,
@@ -267,11 +294,13 @@ def list_documents(
         include_unpublished=include_unpublished,
         sort_by=sort,
         return_total=True,
+        allowed_areas=allowed_areas,
     )
     if isinstance(payload, dict):
         return {
             "empresa_id": company_id,
             "total": payload.get("total", 0),
+            "pending_total": payload.get("pending_total", 0),
             "limit": limit,
             "offset": offset,
             "documentos": payload.get("items", []),
@@ -299,6 +328,9 @@ def list_published_documents(
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
+    allowed_areas = _allowed_areas_for_user(company_id, user)
+    if area is not None:
+        _assert_area_access(company_id, user, area)
     payload = services.read_published_documents(
         company_id=company_id,
         area=area,
@@ -310,11 +342,13 @@ def list_published_documents(
         include_content=include_content,
         sort_by=sort,
         return_total=True,
+        allowed_areas=allowed_areas,
     )
     if isinstance(payload, dict):
         return {
             "empresa_id": company_id,
             "total": payload.get("total", 0),
+            "pending_total": payload.get("pending_total", 0),
             "limit": limit,
             "offset": offset,
             "documentos": payload.get("items", []),
@@ -336,6 +370,10 @@ def create_document(
 ):
     _is_scoped_access_allowed(company_id, user)
     try:
+        _assert_area_access(company_id, user, payload.area)
+        should_mark_pending = ACCESS_CONTROL_ENABLED and not _can_publish(user)
+        if payload.publicar and not _can_publish(user):
+            raise HTTPException(status_code=403, detail="Somente aprovadores ou administradores podem publicar documentos.")
         _assert_company_taxonomies(company_id, payload.area, payload.categoria)
         doc = services.create_or_update_text_document(
             company_id=company_id,
@@ -350,6 +388,7 @@ def create_document(
             ai_prompt=payload.ai_prompt,
             data_validade=payload.data_validade,
             is_published=payload.publicar,
+            pending_approval=should_mark_pending and not payload.publicar,
             base_version=payload.base_version,
         )
         document_payload = {**doc}
@@ -366,9 +405,10 @@ def delete_document(
     area: str,
     categoria: str,
     slug: str,
-    user: TokenData = Depends(require_role("admin")),
+    user: TokenData = Depends(require_role("admin", "editor")),
 ):
     _is_scoped_access_allowed(company_id, user)
+    _assert_area_access(company_id, user, area)
     deleted_jobs = _delete_matching_upload_jobs(company_id, area, categoria, slug)
     deleted_document = None
     try:
@@ -405,6 +445,9 @@ def list_company_areas(
     _is_scoped_access_allowed(company_id, user)
     try:
         items = db.list_taxonomies(company_id, "area")
+        allowed_areas = _allowed_areas_for_user(company_id, user)
+        if allowed_areas is not None:
+            items = [item for item in items if services._sanitize(str(item or "")) in allowed_areas]
         return {"empresa_id": company_id, "items": items}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -435,6 +478,7 @@ def delete_company_area(
 ):
     _is_scoped_access_allowed(company_id, user)
     try:
+        _assert_area_access(company_id, user, name)
         db.delete_taxonomy(company_id, "area", name)
         return {"status": "removida"}
     except ValueError as exc:
@@ -449,6 +493,9 @@ def list_company_categories(
     _is_scoped_access_allowed(company_id, user)
     try:
         items = db.list_taxonomies(company_id, "categoria")
+        allowed_areas = _allowed_areas_for_user(company_id, user)
+        if allowed_areas is not None:
+            items = [item for item in items if services._sanitize(str((item or {}).get("area") or "")) in allowed_areas]
         return {"empresa_id": company_id, "items": items}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -468,6 +515,7 @@ def create_company_category(
     if not area:
         raise HTTPException(status_code=400, detail="Área é obrigatória para cadastrar categoria.")
     try:
+        _assert_area_access(company_id, user, area)
         created = db.create_taxonomy(company_id, "categoria", name, parent_area=area)
         return {"categoria": created}
     except Exception as exc:
@@ -483,6 +531,8 @@ def delete_company_category(
 ):
     _is_scoped_access_allowed(company_id, user)
     try:
+        if area is not None:
+            _assert_area_access(company_id, user, area)
         if area is not None:
             db.delete_taxonomy(company_id, "categoria", name, area=area)
         else:
@@ -510,6 +560,10 @@ async def upload_document(
 ):
     _is_scoped_access_allowed(company_id, user)
     try:
+        _assert_area_access(company_id, user, area)
+        should_mark_pending = ACCESS_CONTROL_ENABLED and not _can_publish(user)
+        if publicar and not _can_publish(user):
+            raise HTTPException(status_code=403, detail="Somente aprovadores ou administradores podem publicar documentos.")
         _assert_company_taxonomies(company_id, area, categoria)
         tag_list = [item.strip() for item in tags.split(",") if item.strip()] if tags else []
         file_name = file.filename or "documento"
@@ -563,6 +617,7 @@ async def upload_document(
                     ai_prompt=ai_prompt,
                     data_validade=data_validade,
                     content_type=file.content_type,
+                    pending_approval=should_mark_pending and not publicar,
                 )
                 documento_payload = {**result}
                 if documento_payload.get("title") is not None and documento_payload.get("titulo") is None:
@@ -574,6 +629,7 @@ async def upload_document(
                         categoria=documento_payload.get("categoria") or categoria or services.DEFAULT_CATEGORIA,
                         slug=documento_payload.get("slug") or slug or services.DEFAULT_SLUG,
                         version=str(documento_payload["version"]),
+                        approver_email=_author_email(user),
                     )
                     documento_payload["published_version"] = published_result.get("version", documento_payload.get("published_version", ""))
                 _UPLOAD_JOBS[job_id].update({
@@ -614,6 +670,7 @@ def upload_document_status(
     job = _load_upload_job(job_id)
     if not job or job.get("empresa_id") != company_id:
         raise HTTPException(status_code=410, detail="Processamento não encontrado ou reiniciado. Envie o arquivo novamente.")
+    _assert_area_access(company_id, user, job.get("area"))
     return job
 
 
@@ -624,10 +681,12 @@ def list_processing_uploads(
     user: TokenData = Depends(require_role("admin", "editor")),
 ):
     _is_scoped_access_allowed(company_id, user)
+    allowed_areas = _allowed_areas_for_user(company_id, user)
     return {
         "documentos": [
             job
             for job in _load_company_upload_jobs(company_id, status_filter=status)
+            if allowed_areas is None or services._sanitize(job.get("area") or services.DEFAULT_AREA) in allowed_areas
             if job.get("status") in {"processing", "failed", "done"}
         ],
     }
@@ -640,11 +699,19 @@ def publish_document_version(
     categoria: str,
     slug: str,
     payload: PublishPayload,
-    user: TokenData = Depends(require_role("admin", "revisor")),
+    user: TokenData = Depends(require_role("admin", "aprovador")),
 ):
     _is_scoped_access_allowed(company_id, user)
+    _assert_area_access(company_id, user, area)
     try:
-        result = services.set_published_version(company_id, area, categoria, slug, payload.version)
+        result = services.set_published_version(
+            company_id,
+            area,
+            categoria,
+            slug,
+            payload.version,
+            approver_email=_author_email(user),
+        )
         return {"documento": result, "status": "publicada"}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -661,6 +728,7 @@ def list_document_versions(
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
+    _assert_area_access(company_id, user, area)
     try:
         meta = services.list_versions(company_id, area, categoria, slug)
         if meta.get("title") is not None and meta.get("titulo") is None:
@@ -702,6 +770,7 @@ def get_published_document_content(
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
+    _assert_area_access(company_id, user, area)
     try:
         return services.read_published_document_content(
             company_id=company_id,
@@ -728,6 +797,7 @@ def download_document_attachment(
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
+    _assert_area_access(company_id, user, area)
     try:
         attachment = services.get_document_attachment(company_id, area, categoria, slug, attachment_id)
         return FileResponse(

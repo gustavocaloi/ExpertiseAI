@@ -29,6 +29,7 @@ class TokenData(BaseModel):
     company_id: int
     role: str
     email: str
+    roles: list[str] = []
 
 
 def _anonymous_user() -> TokenData:
@@ -38,6 +39,7 @@ def _anonymous_user() -> TokenData:
         company_id=0,
         role="anonymous",
         email=SUPER_ADMIN_USER,
+        roles=["anonymous"],
     )
 
 
@@ -49,13 +51,22 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(subject: int, company_id: int, role: str, email: str, expires_minutes: Optional[int] = None) -> str:
+def create_access_token(
+    subject: int,
+    company_id: int,
+    role: str,
+    email: str,
+    roles: Optional[list[str]] = None,
+    expires_minutes: Optional[int] = None,
+) -> str:
     expire = datetime.utcnow() + timedelta(minutes=expires_minutes or ACCESS_TOKEN_EXPIRE_MINUTES)
+    normalized_roles = roles or ([role] if role else [])
     to_encode = {
         "sub": str(subject),
         "user_id": subject,
         "company_id": company_id,
         "role": role,
+        "roles": normalized_roles,
         "email": email,
         "exp": expire,
     }
@@ -71,6 +82,7 @@ def decode_access_token(token: str) -> TokenData:
             company_id=int(payload.get("company_id")),
             role=payload.get("role"),
             email=payload.get("email"),
+            roles=[str(item) for item in (payload.get("roles") or [payload.get("role")]) if item],
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido") from e
@@ -82,14 +94,52 @@ async def current_user(token: Optional[str] = Depends(oauth2_scheme)) -> TokenDa
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token de autenticação não informado")
     data = decode_access_token(token)
+    if not db.get_user_by_email(data.email):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário não encontrado ou removido")
     return data
+
+
+async def optional_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> TokenData:
+    if not ACCESS_CONTROL_ENABLED or not token:
+        return _anonymous_user()
+    data = decode_access_token(token)
+    if not db.get_user_by_email(data.email):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário não encontrado ou removido")
+    return data
+
+
+def _refresh_membership(user: TokenData) -> TokenData:
+    roles = db.get_user_roles_in_company(user.user_id, user.company_id)
+    if not roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário não possui mais acesso ativo a esta empresa",
+        )
+    current_role = str(db.resolve_effective_role(roles) or "").strip()
+    if not current_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário sem perfil ativo para esta empresa",
+        )
+    user.roles = roles
+    user.role = current_role
+    return user
+
+
+def user_has_required_role(user: TokenData, *roles: str) -> bool:
+    normalized_required = {db.normalize_access_role(role) for role in roles}
+    normalized_user_roles = {db.normalize_access_role(role) for role in (user.roles or [user.role])}
+    if "admin" in normalized_user_roles:
+        return True
+    return bool(normalized_required & normalized_user_roles)
 
 
 def require_role(*roles: str):
     async def _checker(user: TokenData = Depends(current_user)):
         if not ACCESS_CONTROL_ENABLED:
             return user
-        if user.role not in roles:
+        user = _refresh_membership(user)
+        if not user_has_required_role(user, *roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Perfil insuficiente. Permitido: {', '.join(roles)}",
@@ -113,7 +163,4 @@ def require_company_access(company_id: int, user: TokenData = Depends(current_us
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Token fora do contexto da empresa",
         )
-    current_role = db.get_user_role_in_company(user.user_id, company_id)
-    if current_role and current_role != user.role:
-        user.role = current_role
-    return user
+    return _refresh_membership(user)

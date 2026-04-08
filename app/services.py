@@ -391,6 +391,7 @@ def _write_meta(meta_file: Path, payload: Dict[str, Any]) -> None:
 
 def _meta_to_index_entry(meta: Dict[str, Any]) -> Dict[str, Any]:
     published_version = str(meta.get("published_version", "") or "")
+    pending_version = _resolve_pending_approval_version(meta)
     versions = [
         entry
         for entry in meta.get("versions", [])
@@ -422,6 +423,8 @@ def _meta_to_index_entry(meta: Dict[str, Any]) -> Dict[str, Any]:
         "version": selected_version,
         "published_version_uuid": version_uuid,
         "published_version": published_version,
+        "pending_approval": bool(pending_version),
+        "pending_approval_version": pending_version,
         "satellite_document_id": meta.get("document_uuid"),
         "satellite_version_id": version_uuid,
         "created_at": meta.get("created_at"),
@@ -443,6 +446,57 @@ def _read_documents_index(company_id: int) -> list[Dict[str, Any]]:
         return []
     items = payload.get("items")
     return items if isinstance(items, list) else []
+
+
+def _resolve_pending_approval_version(meta: Dict[str, Any]) -> str:
+    versions = [
+        entry
+        for entry in meta.get("versions", [])
+        if isinstance(entry, dict) and entry.get("version") is not None
+    ]
+    if not versions:
+        return ""
+
+    explicit_pending = [
+        str(entry.get("version"))
+        for entry in versions
+        if bool(entry.get("pending_approval"))
+    ]
+    if explicit_pending:
+        return max(explicit_pending, key=_version_key)
+
+    versions_sorted = sorted(versions, key=lambda item: _version_key(item["version"]))
+    published_version = str(meta.get("published_version") or "").strip()
+    if not published_version:
+        latest = versions_sorted[-1]
+        return "" if bool(latest.get("published")) else str(latest.get("version"))
+
+    unpublished_after_published = [
+        str(entry.get("version"))
+        for entry in versions_sorted
+        if not bool(entry.get("published")) and _version_key(str(entry.get("version"))) > _version_key(published_version)
+    ]
+    if unpublished_after_published:
+        return max(unpublished_after_published, key=_version_key)
+    return ""
+
+
+def _with_pending_approval_state(meta: Dict[str, Any]) -> Dict[str, Any]:
+    pending_version = _resolve_pending_approval_version(meta)
+    normalized = dict(meta)
+    versions: list[Dict[str, Any]] = []
+    for entry in meta.get("versions", []):
+        if not isinstance(entry, dict):
+            continue
+        item = dict(entry)
+        item["pending_approval"] = bool(item.get("pending_approval")) or (
+            bool(pending_version) and _version_matches(item.get("version"), pending_version)
+        )
+        versions.append(item)
+    normalized["versions"] = versions
+    normalized["pending_approval"] = bool(pending_version)
+    normalized["pending_approval_version"] = pending_version
+    return normalized
 
 
 def _write_documents_index(company_id: int, items: list[Dict[str, Any]]) -> None:
@@ -1052,6 +1106,9 @@ def _frontmatter(markdown: str, metadata: Dict[str, Any]) -> str:
         f"author: {metadata['author']}",
         f"published: {str(metadata['published']).lower()}",
         f"published_at: {metadata['published_at']}",
+        f"approved_by: {metadata.get('approved_by') or ''}",
+        f"pending_approval: {str(metadata.get('pending_approval', False)).lower()}",
+        f"pending_approval_at: {metadata.get('pending_approval_at') or ''}",
         f"created_at: {metadata['created_at']}",
         f"updated_at: {metadata['updated_at']}",
         f"data_validade: {metadata.get('data_validade') or ''}",
@@ -1076,6 +1133,7 @@ def create_or_update_text_document(
     ai_prompt: Optional[str] = None,
     data_validade: Optional[str] = None,
     is_published: bool = False,
+    pending_approval: bool = False,
     base_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     _validate_document_title(title)
@@ -1155,6 +1213,9 @@ def create_or_update_text_document(
         "created_at": _now(),
         "published": bool(is_published),
         "published_at": _now() if is_published else None,
+        "approved_by": author_email if is_published else None,
+        "pending_approval": bool(pending_approval and not is_published),
+        "pending_approval_at": _now() if pending_approval and not is_published else None,
         "ai_prompt": ai_prompt or "",
     }
 
@@ -1164,7 +1225,14 @@ def create_or_update_text_document(
         for v in meta["versions"]:
             v["published"] = False
             v["published_at"] = None
+            v["approved_by"] = None
+            v["pending_approval"] = False
+            v["pending_approval_at"] = None
         meta["published_version"] = version
+    elif pending_approval:
+        for v in meta["versions"]:
+            v["pending_approval"] = False
+            v["pending_approval_at"] = None
 
     path = _version_path(company_id, area_n, categoria_n, slug_n, version, document_uuid=document_uuid_value)
     doc_payload = _frontmatter(
@@ -1179,6 +1247,9 @@ def create_or_update_text_document(
             "author": author_email,
             "published": is_published,
             "published_at": _now() if is_published else "",
+            "approved_by": author_email if is_published else "",
+            "pending_approval": bool(pending_approval and not is_published),
+            "pending_approval_at": _now() if pending_approval and not is_published else "",
             "created_at": _now(),
             "updated_at": _now(),
             "data_validade": current_data_validade,
@@ -1350,6 +1421,7 @@ async def import_file_to_markdown(
     title: Optional[str] = None,
     ai_prompt: Optional[str] = None,
     data_validade: Optional[str] = None,
+    pending_approval: bool = False,
 ) -> Dict[str, Any]:
     raw = await file.read()
     return await import_file_to_markdown_bytes(
@@ -1366,6 +1438,7 @@ async def import_file_to_markdown(
         title=title,
         ai_prompt=ai_prompt,
         data_validade=data_validade,
+        pending_approval=pending_approval,
     )
 
 
@@ -1384,6 +1457,7 @@ async def import_file_to_markdown_path(
     ai_prompt: Optional[str] = None,
     data_validade: Optional[str] = None,
     content_type: Optional[str] = None,
+    pending_approval: bool = False,
 ) -> Dict[str, Any]:
     normalized_path = Path(file_path)
     if not normalized_path.exists():
@@ -1412,6 +1486,7 @@ async def import_file_to_markdown_path(
         data_validade=data_validade,
         base_version=base_version,
         is_published=False,
+        pending_approval=pending_approval,
     )
     if ext in {".pdf", ".docx"}:
         try:
@@ -1443,6 +1518,7 @@ async def import_file_to_markdown_bytes(
     title: Optional[str] = None,
     ai_prompt: Optional[str] = None,
     data_validade: Optional[str] = None,
+    pending_approval: bool = False,
 ) -> Dict[str, Any]:
     ext = Path(filename or "").suffix.lower()
     if not raw:
@@ -1471,6 +1547,7 @@ async def import_file_to_markdown_bytes(
         data_validade=data_validade,
         base_version=base_version,
         is_published=False,
+        pending_approval=pending_approval,
     )
 
 
@@ -1568,6 +1645,7 @@ def set_published_version(
     categoria: str,
     slug: str,
     version: str,
+    approver_email: Optional[str] = None,
 ) -> Dict[str, Any]:
     area_n = _sanitize(area)
     categoria_n = _sanitize(categoria)
@@ -1584,10 +1662,16 @@ def set_published_version(
         if _version_matches(v["version"], version):
             v["published"] = True
             v["published_at"] = _now()
+            v["approved_by"] = approver_email or v.get("approved_by") or v.get("author")
+            v["pending_approval"] = False
+            v["pending_approval_at"] = None
             published_version_uuid = v.get("version_uuid")
         else:
             v["published"] = False
             v["published_at"] = None
+            v["approved_by"] = None
+            v["pending_approval"] = False
+            v["pending_approval_at"] = None
 
     meta["published_version"] = version
     _write_meta(
@@ -1609,7 +1693,7 @@ def list_versions(company_id: int, area: str, categoria: str, slug: str) -> Dict
     categoria_n = _sanitize(categoria)
     slug_n = _sanitize(slug)
     meta = _read_meta(company_id, area_n, categoria_n, slug_n)
-    return meta
+    return _with_pending_approval_state(meta)
 
 
 def read_published_documents(
@@ -1624,6 +1708,7 @@ def read_published_documents(
     include_unpublished: bool = False,
     sort_by: str = "created_desc",
     return_total: bool = False,
+    allowed_areas: Optional[set[str]] = None,
 ) -> Dict[str, Any] | list[Dict[str, Any]]:
     migrate_documents_storage_layout(company_id)
     root = _company_root(company_id)
@@ -1642,6 +1727,8 @@ def read_published_documents(
         published_version = str(item.get("published_version", "") or "")
         selected_version = str(item.get("version", "") or "")
         if not published_version and not include_unpublished:
+            continue
+        if allowed_areas is not None and str(item.get("area") or "") not in allowed_areas:
             continue
         if area_filter and item.get("area") != area_filter:
             continue
@@ -1698,9 +1785,10 @@ def read_published_documents(
         out = sorted(out, key=lambda item: item["updated_at"] or "", reverse=True)
 
     total = len(out)
+    pending_total = sum(1 for item in out if bool(item.get("pending_approval")))
     documents = out[offset : offset + limit]
     if return_total:
-        return {"total": total, "items": documents}
+        return {"total": total, "pending_total": pending_total, "items": documents}
     return documents
 
 
@@ -1714,7 +1802,7 @@ def read_published_document_content(
     area_n = _sanitize(area)
     categoria_n = _sanitize(categoria)
     slug_n = _sanitize(slug)
-    meta = _read_meta(company_id, area_n, categoria_n, slug_n)
+    meta = _with_pending_approval_state(_read_meta(company_id, area_n, categoria_n, slug_n))
 
     if version is not None:
         selected_version = _version_display(version)
@@ -1773,6 +1861,7 @@ def read_published_document_content(
         "attachments": _public_attachments(meta),
         "versao": selected_version,
         "publicado": bool(selected_entry.get("published")),
+        "pending_approval": bool(selected_entry.get("pending_approval")),
         "updated_at": meta.get("updated_at"),
         "content": body,
     }

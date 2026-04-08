@@ -11,6 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from . import db, services
 from . import kb_routes, routers
 from .config import (
+    ACCESS_CONTROL_ENABLED,
+    ALLOW_PUBLIC_COMPANY_CREATE,
+    APP_ENV,
     BOOTSTRAP_DEFAULT_ADMIN,
     DOCLING_CACHE_DIR,
     DEFAULT_ADMIN_EMAIL,
@@ -51,6 +54,10 @@ async def _upload_jobs_cleanup_loop() -> None:
 
 def create_app() -> FastAPI:
     _configure_logging()
+    if APP_ENV == "production" and not ACCESS_CONTROL_ENABLED:
+        raise RuntimeError("EXPAI_ACCESS_CONTROL_ENABLED=false não é permitido quando EXPAI_APP_ENV=production.")
+    if APP_ENV == "production" and ALLOW_PUBLIC_COMPANY_CREATE:
+        raise RuntimeError("EXPAI_ALLOW_PUBLIC_COMPANY_CREATE=true não é permitido quando EXPAI_APP_ENV=production.")
     openapi_servers = [{"url": API_BASE_URL, "description": "Servidor configurado"}] if API_BASE_URL else None
     app = FastAPI(
         title="Expertise.AI",

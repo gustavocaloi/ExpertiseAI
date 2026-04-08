@@ -45,6 +45,7 @@
             <div id="userMenuDropdown" class="user-menu__dropdown" role="menu" aria-hidden="true">
               <button type="button" id="userProfileMenuItem" class="user-menu__item" role="menuitem" data-session="profileSession">Perfil</button>
               <button type="button" id="userAdminMenuItem" class="user-menu__item hidden-view" role="menuitem" data-session="userAdminSession">Usuários</button>
+              <button type="button" id="userAreaAccessMenuItem" class="user-menu__item hidden-view" role="menuitem" data-session="userAreaAccessSession">Áreas</button>
               <button type="button" id="userLogoutMenuItem" class="user-menu__item user-menu__item--danger" role="menuitem">Sair</button>
             </div>
           </div>
@@ -210,6 +211,7 @@
           <section class="session panel-card" id="userAdminSession">
             <article class="action-card">
               <h3>Administração de usuários</h3>
+              <p class="helper">Crie ou vincule usuários à empresa e gerencie perfis acumulativos de acesso.</p>
               <form id="addUserForm" class="vertical-form">
                 <label>
                   <span>Nome completo</span>
@@ -221,7 +223,7 @@
                 </label>
                 <label>
                   <span>Senha inicial</span>
-                  <input required type="password" id="newUserPassword" placeholder="••••••••" />
+                  <input type="password" id="newUserPassword" placeholder="Obrigatória apenas para novo usuário" />
                 </label>
                 <label>
                   <span>Perfil</span>
@@ -229,8 +231,19 @@
                     <option value="">Selecione um perfil</option>
                     <option value="admin">admin</option>
                     <option value="editor">editor</option>
-                    <option value="revisor">revisor</option>
+                    <option value="aprovador">aprovador</option>
                   </select>
+                </label>
+                <label>
+                  <span>Perfis de restrição</span>
+                  <div class="sort-control__field multi-combobox">
+                    <button type="button" id="newUserRestrictionTrigger" class="multi-combobox__trigger" aria-expanded="false">
+                      <span id="newUserRestrictionTriggerLabel">Selecione perfis de restrição</span>
+                    </button>
+                    <span class="sort-control__icon" aria-hidden="true">▾</span>
+                    <div id="newUserRestrictionDropdown" class="multi-combobox__dropdown hidden-view"></div>
+                  </div>
+                  <small class="helper">Opcional. Vincule um ou mais perfis reutilizáveis ao usuário já no cadastro.</small>
                 </label>
                 <button type="submit">Adicionar usuário</button>
               </form>
@@ -238,10 +251,118 @@
 
               <section class="action-card-grid" style="margin-top: 12px;">
                 <div>
-                  <h4>Usuários da empresa</h4>
+                  <div class="user-admin-toolbar">
+                    <h4>Acessos por usuário</h4>
+                    <div class="user-admin-toolbar__filters">
+                      <label class="user-access-filter">
+                        <span>Ordenar</span>
+                        <div class="sort-control__field">
+                          <select id="userAccessSort">
+                            <option value="name_asc">Nome A-Z</option>
+                            <option value="name_desc">Nome Z-A</option>
+                            <option value="status_active_first">Ativos primeiro</option>
+                            <option value="status_inactive_first">Sem acesso primeiro</option>
+                            <option value="role_desc">Maior perfil primeiro</option>
+                          </select>
+                          <span class="sort-control__icon" aria-hidden="true">▾</span>
+                        </div>
+                      </label>
+                      <label class="user-access-filter">
+                        <span>Status</span>
+                        <div class="sort-control__field">
+                          <select id="userAccessStatusFilter">
+                            <option value="all">Todos</option>
+                            <option value="active">Apenas ativos</option>
+                            <option value="inactive">Sem acesso</option>
+                          </select>
+                          <span class="sort-control__icon" aria-hidden="true">▾</span>
+                        </div>
+                      </label>
+                      <label class="user-access-filter">
+                        <span>Busca</span>
+                        <input type="text" id="userAccessSearch" placeholder="Nome ou e-mail" />
+                      </label>
+                    </div>
+                  </div>
                   <ul id="usersList" class="items-list">Carregando usuários...</ul>
+                  <div class="pager-row user-admin-pager">
+                    <span id="usersPagerInfo" class="pager-info" aria-live="polite">Página 1 de 1</span>
+                    <div class="pager-controls">
+                      <button id="usersPrev" type="button">← Anterior</button>
+                      <button id="usersNext" type="button">Próxima →</button>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div class="user-admin-toolbar">
+                    <h4>Auditoria recente</h4>
+                    <button id="userAuditExport" type="button" class="ghost user-audit-export">Exportar CSV</button>
+                  </div>
+                  <ul id="userAuditList" class="items-list">Carregando auditoria...</ul>
+                  <div class="pager-row user-admin-pager">
+                    <span id="userAuditPagerInfo" class="pager-info" aria-live="polite">Página 1 de 1</span>
+                    <div class="pager-controls">
+                      <button id="userAuditPrev" type="button">← Anterior</button>
+                      <button id="userAuditNext" type="button">Próxima →</button>
+                    </div>
+                  </div>
                 </div>
               </section>
+            </article>
+          </section>
+
+          <section class="session panel-card" id="userAreaAccessSession">
+            <article class="action-card">
+              <h3>Restrição de áreas por usuário</h3>
+              <p class="helper">Defina um perfil padrão por usuário e, se necessário, atribua também um ou mais perfis reutilizáveis de restrição. Administradores sempre mantêm acesso total.</p>
+              <div class="vertical-form">
+                <label>
+                  <span>Usuário</span>
+                  <div class="sort-control__field">
+                    <select id="areaAccessUserSelect"></select>
+                    <span class="sort-control__icon" aria-hidden="true">▾</span>
+                  </div>
+                </label>
+                <label>
+                  <span>Modo de acesso</span>
+                  <div class="sort-control__field">
+                    <select id="areaAccessMode">
+                      <option value="all">Todas as áreas</option>
+                      <option value="selected">Somente áreas selecionadas</option>
+                    </select>
+                    <span class="sort-control__icon" aria-hidden="true">▾</span>
+                  </div>
+                </label>
+                <div>
+                  <span class="user-access-label">Áreas do perfil padrão</span>
+                  <div id="areaAccessChecklist" class="area-access-grid">Carregando áreas...</div>
+                </div>
+                <div>
+                  <span class="user-access-label">Perfis adicionais atribuídos</span>
+                  <div id="areaAccessProfilesList" class="area-profile-list">Carregando perfis...</div>
+                </div>
+                <button type="button" id="saveAreaAccessBtn">Salvar restrição de áreas</button>
+                <p class="helper" id="areaAccessMsg"></p>
+              </div>
+            </article>
+            <article class="action-card" style="margin-top: 12px;">
+              <h3>Perfis reutilizáveis de restrição</h3>
+              <form id="createAreaRestrictionProfileForm" class="vertical-form">
+                <label>
+                  <span>Nome do perfil</span>
+                  <input id="areaRestrictionProfileName" placeholder="financeiro-externo" />
+                </label>
+                <label>
+                  <span>Descrição</span>
+                  <input id="areaRestrictionProfileDescription" placeholder="Perfil para usuários que acessam apenas áreas financeiras" />
+                </label>
+                <div>
+                  <span class="user-access-label">Áreas do perfil</span>
+                  <div id="areaRestrictionProfileChecklist" class="area-access-grid">Carregando áreas...</div>
+                </div>
+                <button type="submit">Criar perfil de restrição</button>
+                <p class="helper" id="areaRestrictionProfileMsg"></p>
+              </form>
             </article>
           </section>
 
@@ -416,6 +537,83 @@
               </div>
             </div>
           </footer>
+        </div>
+      </div>
+
+      <div id="userAccessModal" class="doc-modal" aria-live="polite" aria-hidden="true">
+        <div class="doc-modal__overlay" id="userAccessModalOverlay"></div>
+        <div class="doc-modal__dialog user-access-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="userAccessModalTitle">
+          <header class="doc-modal__header">
+            <div>
+              <h3 id="userAccessModalTitle" class="doc-title">Usuário</h3>
+              <p class="doc-modal__meta" id="userAccessModalMeta"></p>
+            </div>
+            <button type="button" id="userAccessModalCloseBtn" class="ghost doc-modal__close" aria-label="Fechar popup">✕</button>
+          </header>
+          <section class="vertical-form">
+            <label>
+              <span>Nome</span>
+              <input id="userAccessModalName" />
+            </label>
+            <label>
+              <span>E-mail</span>
+              <input id="userAccessModalEmail" disabled />
+            </label>
+            <label>
+              <span>Perfis</span>
+              <div id="userAccessModalRoles" class="area-access-grid"></div>
+            </label>
+            <label>
+              <span>Perfis de restrição</span>
+              <div class="sort-control__field multi-combobox">
+                <button type="button" id="userAccessModalRestrictionTrigger" class="multi-combobox__trigger" aria-expanded="false">
+                  <span id="userAccessModalRestrictionTriggerLabel">Selecione perfis de restrição</span>
+                </button>
+                <span class="sort-control__icon" aria-hidden="true">▾</span>
+                <div id="userAccessModalRestrictionDropdown" class="multi-combobox__dropdown hidden-view"></div>
+              </div>
+              <small class="helper">Selecione um ou mais perfis reutilizáveis para complementar o perfil padrão do usuário.</small>
+            </label>
+            <label>
+              <span>Redefinir senha</span>
+              <input id="userAccessModalPassword" type="password" placeholder="Nova senha temporária" />
+            </label>
+            <div class="user-access-modal__summary">
+              <p><strong>Escopo de áreas:</strong> <span id="userAccessModalScope">-</span></p>
+              <p><strong>Perfis de restrição:</strong> <span id="userAccessModalRestrictionProfiles">-</span></p>
+              <p><strong>Troca de senha:</strong> <span id="userAccessModalPasswordFlag">-</span></p>
+            </div>
+            <div class="doc-modal__footer-row">
+              <button type="button" id="userAccessModalOpenAreas" class="ghost">Gerenciar regras de restrição</button>
+              <button type="button" id="userAccessModalRevoke" class="ghost">Revogar acesso</button>
+              <button type="button" id="userAccessModalSave">Salvar</button>
+            </div>
+            <p class="helper" id="userAccessModalMsg"></p>
+          </section>
+        </div>
+      </div>
+
+      <div id="forcePasswordModal" class="doc-modal" aria-live="polite" aria-hidden="true">
+        <div class="doc-modal__overlay"></div>
+        <div class="doc-modal__dialog user-access-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="forcePasswordTitle">
+          <header class="doc-modal__header">
+            <div>
+              <h3 id="forcePasswordTitle" class="doc-title">Troca obrigatória de senha</h3>
+              <p class="doc-modal__meta">A senha provisória precisa ser alterada antes de continuar.</p>
+            </div>
+          </header>
+          <section class="vertical-form">
+            <label>
+              <span>Nova senha</span>
+              <input id="forcePasswordNew" type="password" placeholder="Mínimo de 8 caracteres" />
+            </label>
+            <label>
+              <span>Confirmar nova senha</span>
+              <input id="forcePasswordConfirm" type="password" placeholder="Repita a nova senha" />
+            </label>
+            <button type="button" id="forcePasswordSave">Alterar senha</button>
+            <p class="helper" id="forcePasswordMsg"></p>
+          </section>
         </div>
       </div>
     </div>
