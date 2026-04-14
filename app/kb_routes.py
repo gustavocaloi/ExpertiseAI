@@ -35,7 +35,11 @@ class DocumentCreatePayload(BaseModel):
     content: str
     tags: list[str] = []
     ai_prompt: Optional[str] = None
-    data_validade: Optional[str] = None
+    data_validade: Optional[str] = Field(
+        default=None,
+        description="Data de validade do documento no formato YYYY-MM-DD.",
+        examples=["2026-12-31"],
+    )
     base_version: Union[str, None] = None
     publicar: bool = False
 
@@ -553,7 +557,11 @@ async def upload_document(
     publicar: bool = Form(default=False),
     title: str = Form(None),
     ai_prompt: Optional[str] = Form(default=None),
-    data_validade: Optional[str] = Form(default=None),
+    data_validade: Optional[str] = Form(
+        default=None,
+        description="Data de validade do documento no formato YYYY-MM-DD.",
+        example="2026-12-31",
+    ),
     tags: str = Form(""),
     file: UploadFile = File(...),
     user: TokenData = Depends(require_role("admin", "editor")),
