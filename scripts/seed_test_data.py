@@ -11,10 +11,21 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+class AuthSession:
+    def __init__(self, access_token: str, refresh_token: Optional[str] = None) -> None:
+        self.access_token = access_token
+        self.refresh_token = refresh_token or ""
+
+
 def _request_json(method: str, url: str, payload: Optional[dict[str, Any]] = None, token: Optional[str] = None) -> Any:
     body = None
     headers = {
         "Accept": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
     }
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
@@ -40,18 +51,65 @@ def _request_json(method: str, url: str, payload: Optional[dict[str, Any]] = Non
         raise RuntimeError(f"Erro de conexão: {exc}") from exc
 
 
-def login(base_url: str, email: str, password: str, company_id: int) -> str:
+def login(base_url: str, email: str, password: str, company_id: int) -> AuthSession:
     payload = {"email": email, "password": password, "company_id": company_id}
     data = _request_json("POST", f"{base_url}/api/v1/auth/login", payload)
-    token = data.get("access_token") if isinstance(data, dict) else None
-    if not token:
-        raise RuntimeError("Falha ao autenticar: token não retornado.")
-    return token
+    if not isinstance(data, dict):
+        raise RuntimeError("Falha ao autenticar: resposta inválida.")
+    access_token = data.get("access_token")
+    refresh_token = data.get("refresh_token")
+    if not access_token:
+        raise RuntimeError("Falha ao autenticar: access_token não retornado.")
+    return AuthSession(access_token=access_token, refresh_token=refresh_token)
 
 
-def create_area(base_url: str, company_id: int, name: str, token: Optional[str]) -> None:
+def refresh_session(base_url: str, session: AuthSession) -> AuthSession:
+    if not session.refresh_token:
+        raise RuntimeError("Falha ao renovar sessão: refresh_token não retornado no login.")
+    data = _request_json(
+        "POST",
+        f"{base_url}/api/v1/auth/refresh",
+        {"refresh_token": session.refresh_token},
+    )
+    if not isinstance(data, dict):
+        raise RuntimeError("Falha ao renovar sessão: resposta inválida.")
+    access_token = data.get("access_token")
+    refresh_token = data.get("refresh_token")
+    if not access_token:
+        raise RuntimeError("Falha ao renovar sessão: access_token não retornado.")
+    session.access_token = access_token
+    session.refresh_token = refresh_token or session.refresh_token
+    return session
+
+
+def request_json_with_auth(
+    method: str,
+    url: str,
+    payload: Optional[dict[str, Any]],
+    base_url: str,
+    session: Optional[AuthSession],
+) -> Any:
+    if session is None:
+        return _request_json(method, url, payload, None)
     try:
-        _request_json("POST", f"{base_url}/api/v1/empresas/{company_id}/areas", {"name": name}, token)
+        return _request_json(method, url, payload, session.access_token)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "HTTP 401" not in message or not session.refresh_token:
+            raise
+        refresh_session(base_url, session)
+        return _request_json(method, url, payload, session.access_token)
+
+
+def create_area(base_url: str, company_id: int, name: str, session: Optional[AuthSession]) -> None:
+    try:
+        request_json_with_auth(
+            "POST",
+            f"{base_url}/api/v1/empresas/{company_id}/areas",
+            {"name": name},
+            base_url,
+            session,
+        )
     except RuntimeError as exc:
         msg = str(exc)
         if "já" in msg or "exist" in msg:
@@ -59,13 +117,14 @@ def create_area(base_url: str, company_id: int, name: str, token: Optional[str])
         print(f"[warn] área '{name}' não criada: {msg}")
 
 
-def create_category(base_url: str, company_id: int, name: str, area: str, token: Optional[str]) -> None:
+def create_category(base_url: str, company_id: int, name: str, area: str, session: Optional[AuthSession]) -> None:
     try:
-        _request_json(
+        request_json_with_auth(
             "POST",
             f"{base_url}/api/v1/empresas/{company_id}/categorias",
             {"name": name, "area": area},
-            token,
+            base_url,
+            session,
         )
     except RuntimeError as exc:
         msg = str(exc)
@@ -81,7 +140,7 @@ def create_document(
     categoria: str,
     title: str,
     content: str,
-    token: Optional[str],
+    session: Optional[AuthSession],
     publish: bool,
     data_validade: Optional[str],
 ) -> None:
@@ -95,7 +154,13 @@ def create_document(
         "publicar": bool(publish),
         "data_validade": data_validade,
     }
-    _request_json("POST", f"{base_url}/api/v1/empresas/{company_id}/documentos", payload, token)
+    request_json_with_auth(
+        "POST",
+        f"{base_url}/api/v1/empresas/{company_id}/documentos",
+        payload,
+        base_url,
+        session,
+    )
 
 
 def main() -> int:
@@ -111,19 +176,19 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Seed de aleatoriedade.")
     args = parser.parse_args()
 
-    token = None
+    session = None
     if args.email and args.password:
-        token = login(args.base_url, args.email, args.password, args.company_id)
+        session = login(args.base_url, args.email, args.password, args.company_id)
 
     random.seed(args.seed)
 
     areas = [f"Area {i + 1}" for i in range(max(1, args.areas))]
     categorias = []
     for area in areas:
-        create_area(args.base_url, args.company_id, area, token)
+        create_area(args.base_url, args.company_id, area, session)
         for j in range(max(1, args.categories_per_area)):
             cat = f"Categoria {area.split()[-1]}-{j + 1}"
-            create_category(args.base_url, args.company_id, cat, area, token)
+            create_category(args.base_url, args.company_id, cat, area, session)
             categorias.append((area, cat))
 
     total_docs = max(0, args.documents)
@@ -139,7 +204,7 @@ def main() -> int:
             categoria,
             title,
             content,
-            token,
+            session,
             args.publish,
             validade,
         )

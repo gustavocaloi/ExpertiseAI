@@ -3,7 +3,9 @@
 ## Autenticacao
 
 - `POST /api/v1/auth/login`
-  - autentica usuario e retorna JWT
+  - autentica usuario e retorna `access_token` e `refresh_token`
+- `POST /api/v1/auth/refresh`
+  - renova a sessao e retorna novo `access_token` e novo `refresh_token`
 - `POST /api/v1/auth/change-password`
   - troca obrigatoria de senha quando aplicavel
 - `GET /api/v1/auth/me`
@@ -66,6 +68,34 @@
 - `limit`
 - `offset`
 - `sort`
+
+## Campo `data_validade`
+
+Nas rotas de criacao e upload de documento, a data de validade deve ser enviada no campo:
+
+- `data_validade`
+
+Formato esperado:
+
+- `YYYY-MM-DD`
+
+Exemplos:
+
+### Criacao via JSON
+
+```json
+{
+  "title": "Politica de Ferias",
+  "content": "# Politica de Ferias",
+  "data_validade": "2026-12-31"
+}
+```
+
+### Upload via multipart/form-data
+
+```bash
+-F "data_validade=2026-12-31"
+```
 
 ## Observacoes
 

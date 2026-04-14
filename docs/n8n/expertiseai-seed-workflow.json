@@ -1,0 +1,678 @@
+{
+  "name": "ExpertiseAI Seed",
+  "nodes": [
+    {
+      "id": "8c31ef6f-60d9-4d71-9f8d-6c39b239dd0c",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        144,
+        656
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "dbf48057-dc20-4fc3-ba75-2a1f81857721",
+      "name": "Seed Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        368,
+        560
+      ],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"baseUrl\": \"https://expertiseai.exemplo.local\",\n  \"companyId\": 1,\n  \"email\": \"seed@example.com\",\n  \"password\": \"change-me\",\n  \"documents\": 25,\n  \"areas\": 3,\n  \"categoriesPerArea\": 3,\n  \"publish\": true,\n  \"seed\": 42\n}"
+      }
+    },
+    {
+      "id": "0e6265e6-4336-4153-9ed8-b8ca31569101",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        144,
+        464
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "15e68105-4801-48eb-860f-bba1c2f3c75f",
+      "name": "Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        592,
+        640
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl + \"/api/v1/auth/login\" }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ ({ email: $json.email, password: $json.password, company_id: $json.companyId }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "56f282fc-a4a1-4e06-86cb-51f37c9b8e24",
+      "name": "Combine Config And Login",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        816,
+        560
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "preferInput1",
+              "mergeMode": "shallowMerge",
+              "overrideEmpty": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "e4d264d5-c9a3-4f69-817d-931f13046294",
+      "name": "Build Areas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const config = $input.first().json;\nconst totalAreas = Math.max(1, Number(config.areas || 1));\nconst categoriesPerArea = Math.max(1, Number(config.categoriesPerArea || 1));\nconst items = [];\nfor (let i = 0; i < totalAreas; i += 1) {\n  const area = 'Area ' + (i + 1);\n  const categoryNames = [];\n  for (let j = 0; j < categoriesPerArea; j += 1) {\n    categoryNames.push('Categoria ' + (i + 1) + '-' + (j + 1));\n  }\n  items.push({ json: { baseUrl: config.baseUrl, companyId: config.companyId, accessToken: config.access_token, area, categoryNames } });\n}\nreturn items;"
+      }
+    },
+    {
+      "id": "a8ee9246-cce3-4bf0-872d-9aea13bac451",
+      "name": "Taxonomy Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        128
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const areas = $('Build Areas').all();\nlet categoryTotal = 0;\nfor (const item of areas) {\n  categoryTotal += Array.isArray(item.json.categoryNames) ? item.json.categoryNames.length : 0;\n}\nreturn [{ json: { kind: 'taxonomy', createdAreas: areas.length, createdCategories: categoryTotal } }];"
+      }
+    },
+    {
+      "id": "af985202-b3eb-42a7-a352-a7f35ad76e15",
+      "name": "Merge Summaries",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1712,
+        128
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "b161c920-d4dc-478a-88ac-70b5d6d0ef6c",
+      "name": "Create Area",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1488,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl + \"/api/v1/empresas/\" + $json.companyId + \"/areas\" }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ \"Bearer \" + $json.accessToken }}"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ ({ name: $json.area }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "e1d537a5-7ffe-4b4d-a8f2-6e8f940d1255",
+      "name": "Validate Area",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $input.first().json;\nconst source = $('Area Loop').first().json;\nconst statusCode = Number(response.statusCode || 0);\nconst detail = typeof response.body === 'string' ? response.body : JSON.stringify(response.body || {});\nif (statusCode >= 400 && !detail.includes('exist') && !detail.includes('já')) {\n  throw new Error('Create Area failed: HTTP ' + statusCode + ' ' + detail);\n}\nreturn [{ json: { ...source, areaResponse: response.body, areaStatusCode: statusCode } }];"
+      }
+    },
+    {
+      "id": "df8abf79-b365-4af8-b010-56b7e1160986",
+      "name": "Split Categories",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1936,
+        320
+      ],
+      "parameters": {
+        "fieldToSplitOut": "categoryNames",
+        "include": "allOtherFields",
+        "options": {
+          "destinationFieldName": "category"
+        }
+      }
+    },
+    {
+      "id": "3111c3b0-b3a6-4e94-b885-04daa60642db",
+      "name": "Create Category",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2160,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl + \"/api/v1/empresas/\" + $json.companyId + \"/categorias\" }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ \"Bearer \" + $json.accessToken }}"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ ({ name: $json.category, area: $json.area }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "9782dce5-63fc-435a-8047-f4019a0e2f0a",
+      "name": "Validate Categories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const responses = $input.all();\nfor (const responseItem of responses) {\n  const response = responseItem.json;\n  const statusCode = Number(response.statusCode || 0);\n  const detail = typeof response.body === 'string' ? response.body : JSON.stringify(response.body || {});\n  if (statusCode >= 400 && !detail.includes('exist') && !detail.includes('já')) {\n    throw new Error('Create Category failed: HTTP ' + statusCode + ' ' + detail);\n  }\n}\nreturn [{ json: { kind: 'taxonomy_progress' } }];"
+      }
+    },
+    {
+      "id": "8f5cb616-a2ae-4d77-8042-8713efe0df96",
+      "name": "Area Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1264,
+        320
+      ],
+      "parameters": {
+        "batchSize": 1
+      }
+    },
+    {
+      "id": "432708c7-5d11-4200-ae83-7cfc051a5aa9",
+      "name": "Build Documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        800
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const config = $input.first().json;\nfunction validityDate(index) {\n  const date = new Date();\n  date.setUTCDate(date.getUTCDate() + (index % 60));\n  return date.toISOString().slice(0, 10);\n}\nfunction pickTag(area) {\n  return String(area).toLowerCase().split(' ').filter(Boolean).join('-');\n}\nfunction createSeededRandom(seed) {\n  let state = seed >>> 0;\n  return () => {\n    state = (state * 1664525 + 1013904223) >>> 0;\n    return state / 0x100000000;\n  };\n}\nfunction randomCode(rand, usedCodes) {\n  while (true) {\n    const partA = Math.floor(rand() * 0xFFFFFFFF).toString(36).padStart(7, '0');\n    const partB = Math.floor(rand() * 0xFFFFFFFF).toString(36).padStart(7, '0');\n    const code = 'COD-' + (partA + partB).slice(0, 12).toUpperCase();\n    if (!usedCodes.has(code)) {\n      usedCodes.add(code);\n      return code;\n    }\n  }\n}\nconst rand = createSeededRandom((Number(config.seed || 42) ^ Date.now()) >>> 0);\nconst totalAreas = Math.max(1, Number(config.areas || 1));\nconst categoriesPerArea = Math.max(1, Number(config.categoriesPerArea || 1));\nconst totalDocs = Math.max(0, Number(config.documents || 0));\nconst newline = String.fromCharCode(10);\nconst categories = [];\nfor (let i = 0; i < totalAreas; i += 1) {\n  const area = 'Area ' + (i + 1);\n  for (let j = 0; j < categoriesPerArea; j += 1) {\n    categories.push({ area, categoria: 'Categoria ' + (i + 1) + '-' + (j + 1) });\n  }\n}\nconst usedCodes = new Set();\nconst items = [];\nfor (let i = 0; i < totalDocs; i += 1) {\n  const selection = categories[i % categories.length];\n  const code = randomCode(rand, usedCodes);\n  const title = 'Documento ' + (i + 1) + ' [' + code + '] - ' + selection.area + '/' + selection.categoria;\n  items.push({\n    json: {\n      baseUrl: config.baseUrl,\n      companyId: config.companyId,\n      accessToken: config.access_token,\n      area: selection.area,\n      categoria: selection.categoria,\n      title,\n      randomCode: code,\n      content: ['# ' + title, '', 'Conteudo gerado automaticamente para testes.', ''].join(newline),\n      tags: ['seed', pickTag(selection.area)],\n      publicar: Boolean(config.publish),\n      data_validade: validityDate(i)\n    }\n  });\n}\nreturn items;"
+      }
+    },
+    {
+      "id": "e4d897a4-b90e-4ebd-95be-17fb2690f63f",
+      "name": "Document Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        800
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const docs = $('Build Documents').all();\nreturn [{ json: { kind: 'documents', createdDocuments: docs.length } }];"
+      }
+    },
+    {
+      "id": "375fb8a4-5458-4b11-b11f-8be86b8e8683",
+      "name": "Create Document",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1488,
+        608
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl + \"/api/v1/empresas/\" + $json.companyId + \"/documentos\" }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ \"Bearer \" + $json.accessToken }}"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ ({ area: $json.area, categoria: $json.categoria, title: $json.title, slug: null, content: $json.content, tags: $json.tags, publicar: $json.publicar, data_validade: $json.data_validade }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "ce243231-d64e-493b-a802-bd0b93c0f197",
+      "name": "Validate Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        784
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $input.first().json;\nconst statusCode = Number(response.statusCode || 0);\nconst detail = typeof response.body === 'string' ? response.body : JSON.stringify(response.body || {});\nif (statusCode >= 400) {\n  throw new Error('Create Document failed: HTTP ' + statusCode + ' ' + detail);\n}\nreturn [{ json: { kind: 'document_progress' } }];"
+      }
+    },
+    {
+      "id": "3353b68b-0a79-4c32-9b85-01c922e6962b",
+      "name": "Document Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1264,
+        800
+      ],
+      "parameters": {
+        "batchSize": 1
+      }
+    },
+    {
+      "id": "3cfd7782-22f9-427a-94f7-643392b935a6",
+      "name": "Final Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1936,
+        128
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst summary = { ok: true, createdAreas: 0, createdCategories: 0, createdDocuments: 0 };\nfor (const item of items) {\n  if (item.json.kind === 'taxonomy') {\n    summary.createdAreas = item.json.createdAreas || 0;\n    summary.createdCategories = item.json.createdCategories || 0;\n  }\n  if (item.json.kind === 'documents') {\n    summary.createdDocuments = item.json.createdDocuments || 0;\n  }\n}\nreturn [{ json: summary }];"
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Seed Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seed Config": {
+      "main": [
+        [
+          {
+            "node": "Login",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Combine Config And Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Seed Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Login": {
+      "main": [
+        [
+          {
+            "node": "Combine Config And Login",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Combine Config And Login": {
+      "main": [
+        [
+          {
+            "node": "Build Areas",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Areas": {
+      "main": [
+        [
+          {
+            "node": "Area Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Taxonomy Summary": {
+      "main": [
+        [
+          {
+            "node": "Merge Summaries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Summaries": {
+      "main": [
+        [
+          {
+            "node": "Final Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Area": {
+      "main": [
+        [
+          {
+            "node": "Validate Area",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Area": {
+      "main": [
+        [
+          {
+            "node": "Split Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Categories": {
+      "main": [
+        [
+          {
+            "node": "Create Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Category": {
+      "main": [
+        [
+          {
+            "node": "Validate Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Categories": {
+      "main": [
+        [
+          {
+            "node": "Area Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Area Loop": {
+      "main": [
+        [
+          {
+            "node": "Taxonomy Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Area",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Documents": {
+      "main": [
+        [
+          {
+            "node": "Document Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Summary": {
+      "main": [
+        [
+          {
+            "node": "Merge Summaries",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Create Document": {
+      "main": [
+        [
+          {
+            "node": "Validate Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Document": {
+      "main": [
+        [
+          {
+            "node": "Document Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Loop": {
+      "main": [
+        [
+          {
+            "node": "Document Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveManualExecutions": true
+  },
+  "versionId": "19468130-fe0f-4501-9ba2-7920ca1c27c1",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "templateCredsSetupCompleted": true
+  },
+  "id": "expertiseai-seed-workflow",
+  "tags": [],
+  "description": "Executa seed de areas, categorias e documentos na API do ExpertiseAI usando HTTP Request nodes do n8n. Este export usa credenciais fake em Seed Config e deve ser ajustado antes do uso."
+}

@@ -15,7 +15,18 @@ from .config import (
     DEFAULT_COMPANY_NAME,
     SUPER_ADMIN_USER,
 )
-from .security import TokenData, create_access_token, current_user, hash_password, optional_current_user, require_company_access, require_role, verify_password
+from .security import (
+    TokenData,
+    create_access_token,
+    create_refresh_token,
+    current_user,
+    decode_access_token,
+    hash_password,
+    optional_current_user,
+    require_company_access,
+    require_role,
+    verify_password,
+)
 
 
 router = APIRouter()
@@ -37,6 +48,7 @@ class CompanyCreatePayload(BaseModel):
 
 class LoginResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
 
 
@@ -60,6 +72,10 @@ class LoginPayload(BaseModel):
 
 class ChangePasswordPayload(BaseModel):
     new_password: str
+
+
+class RefreshTokenPayload(BaseModel):
+    refresh_token: str
 
 
 class CreateUserPayload(BaseModel):
@@ -174,14 +190,51 @@ def login(payload: LoginPayload):
     if role is None:
         raise HTTPException(status_code=403, detail="Usuário não associado a esta empresa")
 
-    token = create_access_token(
+    access_token = create_access_token(
         subject=user["id"],
         company_id=payload.company_id,
         role=role,
         email=user["email"],
         roles=roles,
     )
-    return {"access_token": token, "token_type": "bearer"}
+    refresh_token = create_refresh_token(
+        subject=user["id"],
+        company_id=payload.company_id,
+        role=role,
+        email=user["email"],
+        roles=roles,
+    )
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+
+
+@router.post("/auth/refresh", response_model=LoginResponse, tags=["auth"])
+def refresh_login(payload: RefreshTokenPayload):
+    token_data = decode_access_token(payload.refresh_token, expected_token_type="refresh")
+
+    user = db.get_user_by_id(token_data.user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário não encontrado ou removido")
+
+    roles = db.get_user_roles_in_company(token_data.user_id, token_data.company_id)
+    role = db.resolve_effective_role(roles)
+    if role is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuário não associado a esta empresa")
+
+    access_token = create_access_token(
+        subject=token_data.user_id,
+        company_id=token_data.company_id,
+        role=role,
+        email=user["email"],
+        roles=roles,
+    )
+    refresh_token = create_refresh_token(
+        subject=token_data.user_id,
+        company_id=token_data.company_id,
+        role=role,
+        email=user["email"],
+        roles=roles,
+    )
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 
 @router.post("/auth/change-password", tags=["auth"])

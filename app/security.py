@@ -13,6 +13,7 @@ from .config import (
     ACCESS_CONTROL_ENABLED,
     ACCESS_TOKEN_EXPIRE_MINUTES,
     ALGORITHM,
+    REFRESH_TOKEN_EXPIRE_MINUTES,
     SECRET_KEY,
     SUPER_ADMIN_USER,
 )
@@ -30,6 +31,7 @@ class TokenData(BaseModel):
     role: str
     email: str
     roles: list[str] = []
+    token_type: str = "access"
 
 
 def _anonymous_user() -> TokenData:
@@ -40,6 +42,7 @@ def _anonymous_user() -> TokenData:
         role="anonymous",
         email=SUPER_ADMIN_USER,
         roles=["anonymous"],
+        token_type="access",
     )
 
 
@@ -73,9 +76,35 @@ def create_access_token(
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def decode_access_token(token: str) -> TokenData:
+def create_refresh_token(
+    subject: int,
+    company_id: int,
+    role: str,
+    email: str,
+    roles: Optional[list[str]] = None,
+    expires_minutes: Optional[int] = None,
+) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=expires_minutes or REFRESH_TOKEN_EXPIRE_MINUTES)
+    normalized_roles = roles or ([role] if role else [])
+    to_encode = {
+        "sub": str(subject),
+        "user_id": subject,
+        "company_id": company_id,
+        "role": role,
+        "roles": normalized_roles,
+        "email": email,
+        "token_type": "refresh",
+        "exp": expire,
+    }
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_access_token(token: str, expected_token_type: str = "access") -> TokenData:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        token_type = str(payload.get("token_type") or "access")
+        if token_type != expected_token_type:
+            raise ValueError("unexpected token type")
         return TokenData(
             sub=payload.get("sub"),
             user_id=int(payload.get("user_id")),
@@ -83,6 +112,7 @@ def decode_access_token(token: str) -> TokenData:
             role=payload.get("role"),
             email=payload.get("email"),
             roles=[str(item) for item in (payload.get("roles") or [payload.get("role")]) if item],
+            token_type=token_type,
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido") from e

@@ -1,5 +1,6 @@
 const state = {
   token: localStorage.getItem('expai_token') || '',
+  refreshToken: localStorage.getItem('expai_refresh_token') || '',
   companyId: localStorage.getItem('expai_company_id') || '',
   accessControlEnabled: true,
   defaultCompanyName: '',
@@ -13,6 +14,8 @@ const state = {
 };
 
 let selectedTaxonomyArea = '';
+let authRefreshPromise = null;
+let sessionExpiredMessageShown = false;
 
 const queryParams = new URLSearchParams(window.location.search);
 const DEBUG_MENU = queryParams.has('debug') || queryParams.has('trace') || localStorage.getItem('expai_debug') === '1';
@@ -2170,9 +2173,26 @@ function setUserMenuOpen(open = false) {
   });
 }
 
-function doLogout() {
-  state.token = '';
+function persistAuthTokens(accessToken = '', refreshToken = '') {
+  state.token = accessToken || '';
+  state.refreshToken = refreshToken || '';
+  if (state.token) {
+    localStorage.setItem('expai_token', state.token);
+  } else {
     localStorage.removeItem('expai_token');
+  }
+  if (state.refreshToken) {
+    localStorage.setItem('expai_refresh_token', state.refreshToken);
+  } else {
+    localStorage.removeItem('expai_refresh_token');
+  }
+}
+
+function doLogout(reason = '', notify = false) {
+  state.token = '';
+  state.refreshToken = '';
+  localStorage.removeItem('expai_token');
+  localStorage.removeItem('expai_refresh_token');
   if (isAccessControlEnabled()) {
     localStorage.removeItem('expai_company_id');
   }
@@ -2195,6 +2215,55 @@ function doLogout() {
   if (createMsg) {
     createMsg.textContent = '';
   }
+  if (notify && reason) {
+    showToast(reason, 'error');
+  } else if (reason && loginMsg) {
+    loginMsg.textContent = reason;
+    loginMsg.className = 'helper error';
+  }
+}
+
+async function refreshAccessToken() {
+  if (!isAccessControlEnabled()) {
+    return false;
+  }
+  if (!state.refreshToken) {
+    return false;
+  }
+  if (authRefreshPromise) {
+    return authRefreshPromise;
+  }
+
+  authRefreshPromise = (async () => {
+    const response = await fetch('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: state.refreshToken }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = data?.detail || `Erro ${response.status}`;
+      throw new Error(typeof message === 'string' ? message : JSON.stringify(message));
+    }
+    if (!data?.access_token || !data?.refresh_token) {
+      throw new Error('Resposta de refresh sem tokens válidos.');
+    }
+    persistAuthTokens(data.access_token, data.refresh_token);
+    sessionExpiredMessageShown = false;
+    return true;
+  })();
+
+  try {
+    return await authRefreshPromise;
+  } finally {
+    authRefreshPromise = null;
+  }
+}
+
+function handleAuthenticationFailure(message = 'Sua sessão expirou. Faça login novamente.') {
+  const shouldNotify = !sessionExpiredMessageShown;
+  sessionExpiredMessageShown = true;
+  doLogout(message, shouldNotify);
 }
 
 async function loadUserSession(force = false) {
@@ -3032,18 +3101,52 @@ docArea?.addEventListener('change', () => {
 });
 
 async function apiFetch(path, options = {}) {
-  const headers = options.headers || {};
-  if (state.token) {
+  const headers = { ...(options.headers || {}) };
+  if (state.token && !headers.Authorization) {
     headers.Authorization = `Bearer ${state.token}`;
   }
   if (options.body && !(options.body instanceof FormData) && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
 
-  const response = await fetch(path, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
+  const request = async () => {
+    const response = await fetch(path, { ...options, headers: { ...headers } });
+    const data = await response.json().catch(() => ({}));
+    return { response, data };
+  };
+
+  let { response, data } = await request();
+  const shouldTryRefresh = (
+    response.status === 401
+    && isAccessControlEnabled()
+    && Boolean(state.refreshToken)
+    && !options.skipAuthRefresh
+    && path !== '/api/v1/auth/login'
+    && path !== '/api/v1/auth/refresh'
+  );
+
+  if (shouldTryRefresh) {
+    try {
+      await refreshAccessToken();
+      headers.Authorization = `Bearer ${state.token}`;
+      ({ response, data } = await request());
+    } catch (error) {
+      handleAuthenticationFailure(error.message || 'Sua sessão expirou. Faça login novamente.');
+      const authError = new Error(error.message || 'Sua sessão expirou. Faça login novamente.');
+      authError.status = 401;
+      throw authError;
+    }
+  }
+
   if (!response.ok) {
     const message = data?.detail || `Erro ${response.status}`;
+    if (
+      response.status === 401
+      && isAccessControlEnabled()
+      && (path === '/api/v1/auth/refresh' || !state.refreshToken || options.skipAuthRefresh)
+    ) {
+      handleAuthenticationFailure(typeof message === 'string' ? message : 'Sua sessão expirou. Faça login novamente.');
+    }
     const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
     error.status = response.status;
     error.data = data;
@@ -3120,20 +3223,20 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
     const data = await apiFetch('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify(payload),
+      skipAuthRefresh: true,
     });
 
-    state.token = data.access_token;
+    persistAuthTokens(data.access_token, data.refresh_token);
     state.companyId = String(payload.company_id);
-    localStorage.setItem('expai_token', state.token);
     localStorage.setItem('expai_company_id', state.companyId);
+    sessionExpiredMessageShown = false;
     loginMsg.textContent = 'Login efetuado com sucesso.';
     loginMsg.className = 'helper success';
     await loadUserSession(true);
     if (state.profile) {
       setPanel(true);
     } else {
-      state.token = '';
-      localStorage.removeItem('expai_token');
+      persistAuthTokens('', '');
       setPanel(false);
     }
   } catch (error) {

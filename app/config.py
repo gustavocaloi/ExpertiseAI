@@ -14,6 +14,7 @@ APP_ENV = os.getenv("EXPAI_APP_ENV", "development").strip().lower()
 SECRET_KEY = os.getenv("EXPAI_SECRET_KEY", "change-me")
 ALGORITHM = os.getenv("EXPAI_JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("EXPAI_ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
+REFRESH_TOKEN_EXPIRE_MINUTES = int(os.getenv("EXPAI_REFRESH_TOKEN_EXPIRE_MINUTES", "43200"))
 ACCESS_CONTROL_ENABLED = os.getenv("EXPAI_ACCESS_CONTROL_ENABLED", "true").lower() in {"1", "true", "yes"}
 ALLOW_PUBLIC_COMPANY_CREATE = os.getenv("EXPAI_ALLOW_PUBLIC_COMPANY_CREATE", "false").lower() in {"1", "true", "yes"}
 _api_base_url = os.getenv("EXPAI_API_BASE_URL", "").strip()
