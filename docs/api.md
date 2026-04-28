@@ -21,7 +21,9 @@
 - `GET /api/v1/empresas/{empresa_id}/documentos`
   - lista documentos com suporte a filtros, paginacao e ordenacao
 - `GET /api/v1/empresas/{empresa_id}/documentos/publicados`
-  - lista somente documentos publicados
+  - lista somente documentos publicados no contrato original
+- `GET /api/v2/empresas/{empresa_id}/documentos/publicados`
+  - lista documentos publicados com filtro de validade e metadados de paginacao
 - `POST /api/v1/empresas/{empresa_id}/documentos`
   - cria ou atualiza documento via texto
 - `POST /api/v1/empresas/{empresa_id}/documentos/upload`
@@ -68,6 +70,48 @@
 - `limit`
 - `offset`
 - `sort`
+
+Na rota versionada `GET /api/v2/empresas/{empresa_id}/documentos/publicados`, tambem existe:
+
+- `data_validade_ate` (quando informado, retorna documentos com `data_validade <= dd/mm/aaaa`; quando omitido, retorna documentos com `data_validade >= hoje`)
+
+Exemplo para documentos publicados com validade ate 31/12/2026:
+
+```text
+GET /api/v2/empresas/{empresa_id}/documentos/publicados?data_validade_ate=31/12/2026
+```
+
+## Paginacao de documentos publicados
+
+A rota `GET /api/v2/empresas/{empresa_id}/documentos/publicados` usa `limit` e `offset`.
+
+Exemplo da primeira pagina:
+
+```text
+GET /api/v2/empresas/{empresa_id}/documentos/publicados?limit=100&offset=0
+```
+
+A resposta inclui metadados para buscar todas as paginas:
+
+```json
+{
+  "total": 250,
+  "limit": 100,
+  "offset": 0,
+  "pagination": {
+    "page": 1,
+    "page_size": 100,
+    "total_pages": 3,
+    "has_next": true,
+    "has_previous": false,
+    "next_offset": 100,
+    "previous_offset": null
+  },
+  "documentos": []
+}
+```
+
+Para retornar todos os documentos publicados, repita a chamada usando `pagination.next_offset` enquanto `pagination.has_next` for `true`.
 
 ## Campo `data_validade`
 

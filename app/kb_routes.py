@@ -4,7 +4,7 @@ import logging
 import asyncio
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional, Union
 from uuid import uuid4
 
@@ -19,6 +19,7 @@ from .security import TokenData, require_company_access, require_role, user_has_
 
 
 router = APIRouter()
+router_v2 = APIRouter()
 _UPLOAD_JOBS: dict[str, dict[str, Any]] = {}
 _ACTIVE_UPLOAD_JOBS: set[str] = set()
 _UPLOAD_JOBS_DIR = Path(DATA_DIR) / "_upload_jobs"
@@ -57,6 +58,26 @@ class CategoryPayload(BaseModel):
     area: str
 
 
+class PaginationPayload(BaseModel):
+    page: int = Field(..., description="Numero da pagina atual calculado a partir de limit e offset.")
+    page_size: int = Field(..., description="Quantidade maxima de itens por pagina.")
+    total_pages: int = Field(..., description="Total de paginas disponiveis.")
+    has_next: bool = Field(..., description="Indica se existe proxima pagina.")
+    has_previous: bool = Field(..., description="Indica se existe pagina anterior.")
+    next_offset: Optional[int] = Field(default=None, description="Offset da proxima pagina, quando existir.")
+    previous_offset: Optional[int] = Field(default=None, description="Offset da pagina anterior, quando existir.")
+
+
+class DocumentListResponse(BaseModel):
+    empresa_id: int
+    total: int = Field(..., description="Total de documentos encontrados com os filtros aplicados.")
+    pending_total: int = Field(default=0, description="Total de documentos pendentes nos filtros aplicados.")
+    limit: int = Field(..., description="Quantidade maxima solicitada para a pagina.")
+    offset: int = Field(..., description="Offset usado para retornar a pagina atual.")
+    pagination: PaginationPayload
+    documentos: list[dict[str, Any]]
+
+
 def _is_scoped_access_allowed(company_id: int, user: TokenData) -> None:
     if not ACCESS_CONTROL_ENABLED:
         return
@@ -72,6 +93,38 @@ def _can_publish(user: TokenData) -> bool:
     if not ACCESS_CONTROL_ENABLED:
         return True
     return user_has_required_role(user, "admin", "aprovador")
+
+
+def _parse_br_date_filter(value: Optional[str], field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    try:
+        return datetime.strptime(cleaned, "%d/%m/%Y").date().isoformat()
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field_name} deve estar no formato dd/mm/aaaa.")
+
+
+def _pagination_meta(total: int, limit: int, offset: int) -> dict[str, Any]:
+    safe_total = max(0, int(total or 0))
+    safe_limit = max(1, int(limit or 1))
+    safe_offset = max(0, int(offset or 0))
+    current_count = max(0, min(safe_limit, max(0, safe_total - safe_offset)))
+    page = (safe_offset // safe_limit) + 1
+    total_pages = max(1, (safe_total + safe_limit - 1) // safe_limit)
+    next_offset = safe_offset + safe_limit if safe_offset + current_count < safe_total else None
+    previous_offset = max(0, safe_offset - safe_limit) if safe_offset > 0 else None
+    return {
+        "page": page,
+        "page_size": safe_limit,
+        "total_pages": total_pages,
+        "has_next": next_offset is not None,
+        "has_previous": previous_offset is not None,
+        "next_offset": next_offset,
+        "previous_offset": previous_offset,
+    }
 
 
 def _allowed_areas_for_user(company_id: int, user: TokenData) -> Optional[set[str]]:
@@ -362,6 +415,83 @@ def list_published_documents(
         "total": len(payload),
         "limit": limit,
         "offset": offset,
+        "documentos": payload,
+    }
+
+
+@router_v2.get(
+    "/empresas/{company_id}/documentos/publicados",
+    tags=["documentos"],
+    response_model=DocumentListResponse,
+)
+def list_published_documents_v2(
+    company_id: int,
+    area: Optional[str] = None,
+    categoria: Optional[str] = None,
+    tag: Optional[str] = None,
+    busca: Optional[str] = None,
+    data_validade_ate: Optional[str] = Query(
+        default=None,
+        description=(
+            "Data limite de validade no formato dd/mm/aaaa. Quando informado, retorna documentos "
+            "com data_validade menor ou igual a esta data. Quando omitido, retorna documentos "
+            "com data_validade maior ou igual a hoje."
+        ),
+        examples=["31/12/2026"],
+    ),
+    limit: int = Query(
+        default=10,
+        ge=1,
+        le=200,
+        description="Quantidade maxima de documentos publicados retornados nesta pagina.",
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description="Quantidade de documentos publicados a ignorar antes de retornar a pagina atual.",
+    ),
+    sort: str = Query(default="created_desc", description="Ordenacao da listagem."),
+    include_content: bool = Query(default=False, description="Inclui o conteudo do documento na resposta."),
+    user: TokenData = Depends(require_company_access),
+):
+    _is_scoped_access_allowed(company_id, user)
+    allowed_areas = _allowed_areas_for_user(company_id, user)
+    if area is not None:
+        _assert_area_access(company_id, user, area)
+    data_validade_ate_iso = _parse_br_date_filter(data_validade_ate, "data_validade_ate")
+    data_validade_de_iso = None if data_validade_ate_iso else date.today().isoformat()
+    payload = services.read_published_documents(
+        company_id=company_id,
+        area=area,
+        categoria=categoria,
+        tag=tag,
+        busca=busca,
+        data_validade_de=data_validade_de_iso,
+        data_validade_ate=data_validade_ate_iso,
+        limit=limit,
+        offset=offset,
+        include_content=include_content,
+        sort_by=sort,
+        return_total=True,
+        allowed_areas=allowed_areas,
+    )
+    if isinstance(payload, dict):
+        total = int(payload.get("total", 0) or 0)
+        return {
+            "empresa_id": company_id,
+            "total": total,
+            "pending_total": payload.get("pending_total", 0),
+            "limit": limit,
+            "offset": offset,
+            "pagination": _pagination_meta(total, limit, offset),
+            "documentos": payload.get("items", []),
+        }
+    return {
+        "empresa_id": company_id,
+        "total": len(payload),
+        "limit": limit,
+        "offset": offset,
+        "pagination": _pagination_meta(len(payload), limit, offset),
         "documentos": payload,
     }
 

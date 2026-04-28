@@ -7,3 +7,4 @@ __pycache__/
 data/
 doc/feat.md
 .env
+.DS_Store

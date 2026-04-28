@@ -11,3 +11,4 @@ README.md
 *.log
 *.sqlite3
 feat.md
+.DS_Store

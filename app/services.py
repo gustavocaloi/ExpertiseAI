@@ -148,8 +148,10 @@ def _is_new_storage_meta_path(company_id: int, meta_file: Path) -> bool:
 
 
 def _load_meta_file(meta_file: Path) -> Dict[str, Any]:
-    with meta_file.open("r", encoding="utf-8") as f:
-        payload = json.load(f)
+    raw = _read_text_with_retry(meta_file, encoding="utf-8")
+    if raw is None:
+        raise OSError(errno.EWOULDBLOCK, "Resource temporarily unavailable")
+    payload = json.loads(raw)
     changed = False
     document_uuid = str(payload.get("document_uuid") or "").strip()
     if not document_uuid:
@@ -181,8 +183,10 @@ def _read_meta_by_path(company_id: int, meta_file: Path, migrate: bool = True) -
 
 
 def _iter_document_meta_files(company_id: int) -> Iterable[Path]:
+    started_at = time.perf_counter()
     root = _company_root(company_id)
     if not root.exists():
+        logger.info("Empresa %s: raiz da base inexistente em %s.", company_id, root)
         return []
     seen: set[Path] = set()
     items: list[Path] = []
@@ -193,6 +197,12 @@ def _iter_document_meta_files(company_id: int) -> Iterable[Path]:
             continue
         seen.add(meta_file)
         items.append(meta_file)
+    logger.info(
+        "Empresa %s: encontrados %s arquivos document.meta.json em %.2fs.",
+        company_id,
+        len(items),
+        time.perf_counter() - started_at,
+    )
     return items
 
 
@@ -512,14 +522,43 @@ def _write_documents_index(company_id: int, items: list[Dict[str, Any]]) -> None
 
 
 def _rebuild_documents_index(company_id: int) -> list[Dict[str, Any]]:
+    started_at = time.perf_counter()
     items: list[Dict[str, Any]] = []
-    for meta_file in _iter_document_meta_files(company_id):
+    errors = 0
+    meta_files = list(_iter_document_meta_files(company_id))
+    total = len(meta_files)
+    logger.info("Empresa %s: rebuild do indice iniciado. metas=%s", company_id, total)
+    for index, meta_file in enumerate(meta_files, start=1):
         try:
             meta = _read_meta_by_path(company_id, meta_file)
         except Exception:
+            errors += 1
+            logger.exception(
+                "Empresa %s: falha ao indexar metadata %s/%s em %s",
+                company_id,
+                index,
+                total,
+                meta_file,
+            )
             continue
         items.append(_meta_to_index_entry(meta))
+        if index % 100 == 0:
+            logger.info(
+                "Empresa %s: rebuild do indice em progresso. processados=%s/%s indexados=%s erros=%s",
+                company_id,
+                index,
+                total,
+                len(items),
+                errors,
+            )
     _write_documents_index(company_id, items)
+    logger.info(
+        "Empresa %s: rebuild do indice concluido em %.2fs. indexados=%s erros=%s",
+        company_id,
+        time.perf_counter() - started_at,
+        len(items),
+        errors,
+    )
     return items
 
 
@@ -761,7 +800,7 @@ def _read_text_with_retry(
         try:
             return path.read_text(encoding=encoding, errors=errors)
         except OSError as exc:
-            if exc.errno == errno.EWOULDBLOCK:
+            if exc.errno in {errno.EDEADLK, errno.EWOULDBLOCK}:
                 time.sleep(_IO_RETRY_DELAY_SECONDS)
                 continue
             raise
@@ -1017,10 +1056,13 @@ def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]
 
 
 def migrate_documents_storage_layout(company_id: Optional[int] = None) -> int:
+    started_at = time.perf_counter()
     root = Path(KB_ROOT)
     if not root.exists():
+        logger.info("Migração de documentos ignorada: KB_ROOT inexistente em %s.", root)
         return 0
 
+    logger.info("Migração de documentos iniciada. root=%s company_id=%s", root, company_id or "todas")
     migrated = 0
     company_ids: list[int] = []
     if company_id is not None:
@@ -1030,18 +1072,34 @@ def migrate_documents_storage_layout(company_id: Optional[int] = None) -> int:
             if child.is_dir() and child.name.isdigit():
                 company_ids.append(int(child.name))
 
+    logger.info("Migração de documentos: empresas encontradas=%s", company_ids)
     for current_company_id in company_ids:
         if company_id is not None and current_company_id in _MIGRATED_COMPANIES:
+            logger.info("Empresa %s: migração ignorada porque já foi executada neste processo.", current_company_id)
             continue
-        for meta_file in list(_iter_document_meta_files(current_company_id)):
+        company_t0 = time.perf_counter()
+        meta_files = list(_iter_document_meta_files(current_company_id))
+        logger.info("Empresa %s: migração iniciada. metas=%s", current_company_id, len(meta_files))
+        company_migrated = 0
+        company_errors = 0
+        for index, meta_file in enumerate(meta_files, start=1):
             if _is_new_storage_meta_path(current_company_id, meta_file):
                 _read_meta_by_path(current_company_id, meta_file, migrate=False)
+                if index % 100 == 0:
+                    logger.info(
+                        "Empresa %s: validação de metas novas em progresso. processados=%s/%s",
+                        current_company_id,
+                        index,
+                        len(meta_files),
+                    )
                 continue
             try:
                 payload = _load_meta_file(meta_file)
                 _migrate_document_to_company_storage(current_company_id, meta_file, payload)
                 migrated += 1
+                company_migrated += 1
             except Exception:
+                company_errors += 1
                 logger.exception(
                     "Falha ao migrar documento legado para o novo layout. empresa=%s meta=%s",
                     current_company_id,
@@ -1050,6 +1108,14 @@ def migrate_documents_storage_layout(company_id: Optional[int] = None) -> int:
         _cleanup_empty_legacy_directories(current_company_id)
         _rebuild_documents_index(current_company_id)
         _MIGRATED_COMPANIES.add(current_company_id)
+        logger.info(
+            "Empresa %s: migração concluida em %.2fs. migrados=%s erros=%s",
+            current_company_id,
+            time.perf_counter() - company_t0,
+            company_migrated,
+            company_errors,
+        )
+    logger.info("Migração de documentos concluida em %.2fs. total_migrados=%s", time.perf_counter() - started_at, migrated)
     return migrated
 
 
@@ -1702,6 +1768,8 @@ def read_published_documents(
     categoria: Optional[str] = None,
     tag: Optional[str] = None,
     busca: Optional[str] = None,
+    data_validade_de: Optional[str] = None,
+    data_validade_ate: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     include_content: bool = True,
@@ -1721,6 +1789,8 @@ def read_published_documents(
     area_filter = _sanitize(area) if area else None
     categoria_filter = _sanitize(categoria) if categoria else None
     tag_filter = _normalize_tag_filter(tag)
+    data_validade_de_filter = (data_validade_de or "").strip()
+    data_validade_ate_filter = (data_validade_ate or "").strip()
     index_items = _ensure_documents_index(company_id)
     out: list[Dict[str, Any]] = []
     for item in index_items:
@@ -1735,6 +1805,11 @@ def read_published_documents(
         if categoria_filter and item.get("categoria") != categoria_filter:
             continue
         if tag_filter and tag_filter not in [_normalize_tag_filter(entry) for entry in (item.get("tags") or [])]:
+            continue
+        item_data_validade = str(item.get("data_validade") or "").strip()
+        if data_validade_de_filter and (not item_data_validade or item_data_validade < data_validade_de_filter):
+            continue
+        if data_validade_ate_filter and (not item_data_validade or item_data_validade > data_validade_ate_filter):
             continue
 
         metadata_matches = True
