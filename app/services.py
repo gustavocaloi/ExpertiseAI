@@ -1807,9 +1807,9 @@ def read_published_documents(
         if tag_filter and tag_filter not in [_normalize_tag_filter(entry) for entry in (item.get("tags") or [])]:
             continue
         item_data_validade = str(item.get("data_validade") or "").strip()
-        if data_validade_de_filter and (not item_data_validade or item_data_validade < data_validade_de_filter):
+        if item_data_validade and data_validade_de_filter and item_data_validade < data_validade_de_filter:
             continue
-        if data_validade_ate_filter and (not item_data_validade or item_data_validade > data_validade_ate_filter):
+        if item_data_validade and data_validade_ate_filter and item_data_validade > data_validade_ate_filter:
             continue
 
         metadata_matches = True

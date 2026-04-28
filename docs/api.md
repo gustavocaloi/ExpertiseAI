@@ -73,7 +73,7 @@
 
 Na rota versionada `GET /api/v2/empresas/{empresa_id}/documentos/publicados`, tambem existe:
 
-- `data_validade_ate` (quando informado, retorna documentos com `data_validade <= dd/mm/aaaa`; quando omitido, retorna documentos com `data_validade >= hoje`)
+- `data_validade_ate` (quando informado, retorna documentos sem `data_validade` ou com `data_validade <= dd/mm/aaaa`; quando omitido, retorna documentos sem `data_validade` ou com `data_validade >= hoje`)
 
 Exemplo para documentos publicados com validade ate 31/12/2026:
 

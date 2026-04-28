@@ -434,8 +434,8 @@ def list_published_documents_v2(
         default=None,
         description=(
             "Data limite de validade no formato dd/mm/aaaa. Quando informado, retorna documentos "
-            "com data_validade menor ou igual a esta data. Quando omitido, retorna documentos "
-            "com data_validade maior ou igual a hoje."
+            "sem data_validade ou com data_validade menor ou igual a esta data. Quando omitido, "
+            "retorna documentos sem data_validade ou com data_validade maior ou igual a hoje."
         ),
         examples=["31/12/2026"],
     ),
