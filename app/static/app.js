@@ -1,7 +1,9 @@
+const DEFAULT_COMPANY_ID = '1';
+
 const state = {
   token: localStorage.getItem('expai_token') || '',
   refreshToken: localStorage.getItem('expai_refresh_token') || '',
-  companyId: localStorage.getItem('expai_company_id') || '',
+  companyId: localStorage.getItem('expai_company_id') || DEFAULT_COMPANY_ID,
   accessControlEnabled: true,
   defaultCompanyName: '',
   defaultCompanyDescription: '',
@@ -1808,11 +1810,11 @@ async function loadPlatformConfig() {
         localStorage.setItem('expai_company_id', state.companyId);
       }
       if (!state.companyId && !defaultCompanyId) {
-        state.companyId = '1';
+        state.companyId = DEFAULT_COMPANY_ID;
         localStorage.setItem('expai_company_id', state.companyId);
       }
       if (!state.companyId) {
-        state.companyId = '1';
+        state.companyId = DEFAULT_COMPANY_ID;
         localStorage.setItem('expai_company_id', state.companyId);
       }
       ensureAnonymousProfile();
@@ -1823,7 +1825,7 @@ async function loadPlatformConfig() {
   } catch {
     state.accessControlEnabled = false;
     if (!state.companyId) {
-      state.companyId = localStorage.getItem('expai_company_id') || '1';
+      state.companyId = localStorage.getItem('expai_company_id') || DEFAULT_COMPANY_ID;
       localStorage.setItem('expai_company_id', state.companyId);
     }
     ensureAnonymousProfile();
@@ -3216,7 +3218,7 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
   const payload = {
     email: document.getElementById('email').value,
     password: document.getElementById('password').value,
-    company_id: Number(document.getElementById('companyId').value),
+    company_id: Number(DEFAULT_COMPANY_ID),
   };
 
   try {

@@ -4,3 +4,5 @@ python-multipart==0.0.20
 python-jose[cryptography]==3.4.0
 passlib[bcrypt]==1.7.4
 docling==2.12.0
+docling-core==2.80.0
+mcp>=1.30.0,<2.0.0

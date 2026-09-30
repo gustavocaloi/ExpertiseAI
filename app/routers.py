@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -13,6 +13,12 @@ from .config import (
     API_BASE_URL,
     DEFAULT_COMPANY_DESCRIPTION,
     DEFAULT_COMPANY_NAME,
+    MCP_ENABLED,
+    MCP_MAX_CONTENT_CHARS,
+    MCP_MAX_PAGE_SIZE,
+    MCP_PATH,
+    MCP_REQUIRED_SCOPES,
+    MCP_RESOURCE_SERVER_URL,
     SUPER_ADMIN_USER,
 )
 from .security import (
@@ -102,6 +108,18 @@ class AreaRestrictionProfilePayload(BaseModel):
     name: str
     areas: list[str] = []
     description: str = ""
+
+
+class McpInfoResponse(BaseModel):
+    enabled: bool
+    transport: str
+    endpoint_path: str
+    endpoint_url: str
+    auth: dict[str, Union[str, list[str]]]
+    tools: list[str]
+    limits: dict[str, int]
+    documentation: str
+    notes: list[str]
 
 
 def _is_scoped_access_allowed(company_id: int, user: TokenData) -> None:
@@ -555,6 +573,52 @@ def get_system_config():
         "default_company_name": DEFAULT_COMPANY_NAME,
         "default_company_description": DEFAULT_COMPANY_DESCRIPTION,
         "super_admin_user": SUPER_ADMIN_USER,
+    }
+
+
+@router.get(
+    "/mcp/info",
+    response_model=McpInfoResponse,
+    tags=["mcp"],
+    summary="Informações do servidor MCP",
+    description=(
+        "Descreve o endpoint MCP usado por agentes de IA. "
+        "As tools MCP são descobertas pelo protocolo MCP, não como rotas REST individuais."
+    ),
+)
+def get_mcp_info():
+    endpoint_path = f"{MCP_PATH.rstrip('/')}/"
+    endpoint_url = f"{API_BASE_URL.rstrip()}{endpoint_path}" if API_BASE_URL else endpoint_path
+    return {
+        "enabled": bool(MCP_ENABLED and ACCESS_CONTROL_ENABLED),
+        "transport": "streamable-http",
+        "endpoint_path": endpoint_path,
+        "endpoint_url": endpoint_url,
+        "auth": {
+            "type": "Bearer",
+            "header": "Authorization: Bearer <access_token>",
+            "token_source": "POST /api/v1/auth/login",
+            "required_scopes": list(MCP_REQUIRED_SCOPES or ["kb:read"]),
+            "resource_server_url": MCP_RESOURCE_SERVER_URL,
+        },
+        "tools": [
+            "describe_knowledge_base",
+            "search_documents",
+            "get_document_metadata",
+            "get_document_content",
+            "list_taxonomies",
+        ],
+        "limits": {
+            "max_page_size": MCP_MAX_PAGE_SIZE,
+            "max_content_chars": MCP_MAX_CONTENT_CHARS,
+        },
+        "documentation": "docs/mcp.md",
+        "notes": [
+            "O MCP exige EXPAI_ACCESS_CONTROL_ENABLED=true.",
+            "Somente documentos publicados são expostos.",
+            "Rascunhos e versões pendentes não são retornados.",
+            "A identidade estável para agentes é document_uuid.",
+        ],
     }
 
 

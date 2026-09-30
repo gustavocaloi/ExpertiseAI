@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Uso:
-  ./scripts/build-and-push-hub.sh <imagem> [tag] [--latest] [--no-cache] [--prune]
+  ./scripts/build-and-push-hub.sh <imagem> [tag] [--latest] [--no-cache] [--prune] [--no-prefetch]
 
 Exemplos:
   ./scripts/build-and-push-hub.sh lcaloi/expertiseai
@@ -14,6 +14,7 @@ Exemplos:
   ./scripts/build-and-push-hub.sh lcaloi/expertiseai --no-cache
   ./scripts/build-and-push-hub.sh lcaloi/expertiseai --prune
   ./scripts/build-and-push-hub.sh lcaloi/expertiseai --no-cache --prune
+  ./scripts/build-and-push-hub.sh lcaloi/expertiseai beta --no-prefetch
   TAG_PUBLISH=beta ./scripts/build-and-push-hub.sh lcaloi/expertiseai
   Sem tag informada, usa a data atual automaticamente.
 
@@ -25,6 +26,13 @@ Flags:
   --latest    Publica tambem a tag latest.
   --no-cache  Faz build sem cache do Docker.
   --prune     Faz limpeza dos caches antes do buildx para reduzir falhas por falta de espaço.
+  --no-prefetch
+              Nao baixa/empacota modelos do Docling no build. Recomendado para beta rapida.
+
+Variaveis opcionais:
+  EXPAI_DOCLING_OCR_ENABLED=false|true
+  EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED=false|true
+  HTTP_PROXY, HTTPS_PROXY, NO_PROXY
 EOF
 }
 
@@ -40,6 +48,9 @@ NO_CACHE_FLAG=""
 DO_PRUNE=0
 PUBLISH_LATEST=0
 TAG="${TAG_PUBLISH:-}"
+DOCLING_PREFETCH="${EXPAI_DOCLING_PREFETCH_MODELS:-true}"
+DOCLING_OCR="${EXPAI_DOCLING_OCR_ENABLED:-false}"
+DOCLING_TABLE_STRUCTURE="${EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED:-false}"
 
 while [ "$#" -gt 0 ]; do
   case "${1:-}" in
@@ -48,6 +59,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --prune)
       DO_PRUNE=1
+      ;;
+    --no-prefetch)
+      DOCLING_PREFETCH=false
       ;;
     --latest)
       PUBLISH_LATEST=1
@@ -106,6 +120,9 @@ if [ "$DO_PRUNE" -eq 1 ]; then
 fi
 
 echo "Buildx build e push multi-plataforma: ${PLATFORMS}"
+echo "Docling prefetch no build: ${DOCLING_PREFETCH}"
+echo "Docling OCR no prefetch: ${DOCLING_OCR}"
+echo "Docling table structure no prefetch: ${DOCLING_TABLE_STRUCTURE}"
 BUILD_TAGS=(--tag "${IMAGE}:${TAG}")
 if [ "$PUBLISH_LATEST" -eq 1 ]; then
   BUILD_TAGS+=(--tag "${IMAGE}:latest")
@@ -113,6 +130,12 @@ fi
 
 docker buildx build \
   --platform "${PLATFORMS}" \
+  --build-arg "EXPAI_DOCLING_PREFETCH_MODELS=${DOCLING_PREFETCH}" \
+  --build-arg "EXPAI_DOCLING_OCR_ENABLED=${DOCLING_OCR}" \
+  --build-arg "EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED=${DOCLING_TABLE_STRUCTURE}" \
+  --build-arg "HTTP_PROXY=${HTTP_PROXY:-}" \
+  --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-}" \
+  --build-arg "NO_PROXY=${NO_PROXY:-}" \
   ${NO_CACHE_FLAG} \
   --provenance=false \
   --sbom=false \

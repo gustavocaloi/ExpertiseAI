@@ -20,6 +20,37 @@ ALLOW_PUBLIC_COMPANY_CREATE = os.getenv("EXPAI_ALLOW_PUBLIC_COMPANY_CREATE", "fa
 _api_base_url = os.getenv("EXPAI_API_BASE_URL", "").strip()
 API_BASE_URL = _api_base_url or "http://localhost:8000"
 
+MCP_ENABLED = os.getenv("EXPAI_MCP_ENABLED", "true").lower() in {"1", "true", "yes"}
+MCP_REQUIRED = os.getenv("EXPAI_MCP_REQUIRED", "false").lower() in {"1", "true", "yes"}
+MCP_PATH = os.getenv("EXPAI_MCP_PATH", "/mcp").strip() or "/mcp"
+if not MCP_PATH.startswith("/"):
+    MCP_PATH = f"/{MCP_PATH}"
+MCP_ISSUER_URL = os.getenv("EXPAI_MCP_ISSUER_URL", API_BASE_URL).strip() or API_BASE_URL
+MCP_RESOURCE_SERVER_URL = (
+    os.getenv("EXPAI_MCP_RESOURCE_SERVER_URL", f"{API_BASE_URL.rstrip('/')}{MCP_PATH}").strip()
+    or f"{API_BASE_URL.rstrip('/')}{MCP_PATH}"
+)
+MCP_REQUIRED_SCOPES = [
+    item.strip()
+    for item in os.getenv("EXPAI_MCP_REQUIRED_SCOPES", "kb:read").split(",")
+    if item.strip()
+]
+MCP_MAX_PAGE_SIZE = int(os.getenv("EXPAI_MCP_MAX_PAGE_SIZE", "100"))
+MCP_MAX_CONTENT_CHARS = int(os.getenv("EXPAI_MCP_MAX_CONTENT_CHARS", "200000"))
+MCP_MAX_REQUEST_BODY_SIZE = int(os.getenv("EXPAI_MCP_MAX_REQUEST_BODY_SIZE", str(1024 * 1024)))
+MCP_MAX_SESSIONS = int(os.getenv("EXPAI_MCP_MAX_SESSIONS", "100"))
+MCP_SESSION_IDLE_TIMEOUT_SECONDS = int(os.getenv("EXPAI_MCP_SESSION_IDLE_TIMEOUT_SECONDS", "1800"))
+MCP_ALLOWED_HOSTS = [
+    item.strip()
+    for item in os.getenv("EXPAI_MCP_ALLOWED_HOSTS", "").split(",")
+    if item.strip()
+]
+MCP_ALLOWED_ORIGINS = [
+    item.strip()
+    for item in os.getenv("EXPAI_MCP_ALLOWED_ORIGINS", "").split(",")
+    if item.strip()
+]
+
 DOCLING_ENABLED = os.getenv("EXPAI_DOCLING_ENABLED", "true").lower() in {"1", "true", "yes"}
 DOCLING_CACHE_DIR = Path(os.getenv("DOCLING_CACHE_DIR", DATA_DIR / "docling_cache"))
 DOCLING_BUNDLED_CACHE_DIR = Path(os.getenv("EXPAI_DOCLING_BUNDLED_CACHE_DIR", "/opt/docling-models"))
@@ -32,6 +63,7 @@ DOCLING_OCR_ENABLED = os.getenv("EXPAI_DOCLING_OCR_ENABLED", "true").lower() in 
 DOCLING_TABLE_STRUCTURE_ENABLED = os.getenv("EXPAI_DOCLING_TABLE_STRUCTURE_ENABLED", "true").lower() in {"1", "true", "yes"}
 DOCLING_PREFETCH_MODELS = os.getenv("EXPAI_DOCLING_PREFETCH_MODELS", "true").lower() in {"1", "true", "yes"}
 REBUILD_KB_ON_START = os.getenv("EXPAI_REBUILD_KB_ON_START", "false").lower() in {"1", "true", "yes"}
+KB_STARTUP_MAINTENANCE_MODE = os.getenv("EXPAI_KB_STARTUP_MAINTENANCE_MODE", "background").strip().lower()
 
 BOOTSTRAP_DEFAULT_ADMIN = os.getenv("EXPAI_BOOTSTRAP_DEFAULT_ADMIN", "true").lower() in {"1", "true", "yes"}
 DEFAULT_COMPANY_NAME = os.getenv("EXPAI_DEFAULT_COMPANY_NAME", "Expertise.AI")

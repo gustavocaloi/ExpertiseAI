@@ -18,6 +18,7 @@ Foi pensada para times que precisam transformar documentos dispersos em uma base
 - Controle de acesso por perfil e por area de documento.
 - Conversao de PDF e DOCX para Markdown com `docling`.
 - Busca, filtros e navegacao otimizados para alto volume de documentos.
+- Servidor MCP seguro para consulta da base publicada por agentes de IA.
 
 ## Casos de uso
 
@@ -118,7 +119,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 120s
     deploy:
       resources:
         limits:
@@ -169,6 +170,7 @@ Indicado para imagem completa, com foco em operacao offline.
 - [Controle de acesso e aprovacao](./docs/access-control.md)
 - [Deploy e operacao](./docs/deployment.md)
 - [API principal](./docs/api.md)
+- [MCP para agentes de IA](./docs/mcp.md)
 - [Frontend e experiencia de uso](./docs/frontend.md)
 
 ## Repositorio oficial

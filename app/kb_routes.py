@@ -133,7 +133,9 @@ def _allowed_areas_for_user(company_id: int, user: TokenData) -> Optional[set[st
     scope = db.get_effective_user_area_scope(user.user_id, company_id).get("effective_scope", {})
     if scope.get("mode") != "selected":
         return None
-    return {services._sanitize(area) for area in (scope.get("areas") or []) if str(area or "").strip()}
+    allowed_areas = {services._sanitize(area) for area in (scope.get("areas") or []) if str(area or "").strip()}
+    allowed_areas.add(services.DEFAULT_AREA)
+    return allowed_areas
 
 
 def _assert_area_access(company_id: int, user: TokenData, area: Optional[str]) -> None:

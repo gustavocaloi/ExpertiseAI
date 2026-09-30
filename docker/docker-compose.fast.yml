@@ -36,6 +36,7 @@ services:
       EXPAI_JWT_ALGORITHM: HS256
       EXPAI_ACCESS_TOKEN_EXPIRE_MINUTES: "480"
       EXPAI_LOG_LEVEL: DEBUG
+      EXPAI_KB_STARTUP_MAINTENANCE_MODE: background
       EXPAI_DOCLING_ENABLED: "true"
       EXPAI_DOCLING_TIMEOUT_SECONDS: "1800"
       EXPAI_DOCLING_MAX_PAGES: "600"
@@ -57,7 +58,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 120s
     deploy:
       resources:
         limits:

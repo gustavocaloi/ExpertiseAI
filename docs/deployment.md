@@ -68,6 +68,10 @@ Caracteristicas:
 - `EXPAI_SUPER_ADMIN_USER`
 - `EXPAI_SUPER_ADMIN_PASSWORD`
 - `EXPAI_DOCLING_PREFETCH_MODELS`
+- `EXPAI_MCP_ENABLED`
+- `EXPAI_MCP_PATH`
+- `EXPAI_MCP_ALLOWED_HOSTS`
+- `EXPAI_MCP_ALLOWED_ORIGINS`
 
 ## Bootstrap inicial
 
@@ -99,6 +103,8 @@ docker compose down -v
 
 ## Observacoes operacionais
 
-- a primeira subida apos mudancas estruturais pode executar migracoes e rebuild de indice;
-- bases grandes podem levar mais tempo no primeiro boot e depois estabilizam;
+- `EXPAI_KB_STARTUP_MAINTENANCE_MODE=background` deixa o container responder ao healthcheck enquanto migracoes e rebuild de indice rodam em segundo plano;
+- use `blocking` apenas quando quiser que a aplicacao espere a manutencao da base terminar antes de aceitar trafego;
+- bases grandes podem emitir logs de migracao/rebuild no primeiro boot, mas o healthcheck nao deve mais falhar por causa desse trabalho;
+- o MCP fica disponivel em `/mcp/` quando habilitado e exige controle de acesso ativo;
 - o `.env` deve permanecer local, enquanto `.env.example` segue como referencia versionada.
