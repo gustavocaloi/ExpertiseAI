@@ -39,7 +39,7 @@ const documents = titles.map((title, i) => ({
       return send({ version: '1.0', published: false, slug: 'novo-documento', area: 'Pessoas', categoria: 'Integração' });
     }
     if (pathname.endsWith('/config')) return send({ access_control_enabled: true, default_company_name: 'Equipe Expertise', default_company_id: 1 });
-    if (pathname.endsWith('/auth/me')) return send({ id: 1, full_name: 'Marina Costa', email: 'marina@example.test', company_id: 1, company_name: 'Equipe Expertise', role, roles: [role] });
+    if (pathname.endsWith('/auth/me')) return send({ id: 1, full_name: 'Marina Costa', email: 'marina@example.test', company_id: 1, company_name: 'Equipe Expertise', role, roles: [role], modules: ['conteudo'] });
     if (pathname.endsWith('/areas')) return send({ items: ['Pessoas', 'Operações'] });
     if (pathname.endsWith('/categorias')) return send({ items: [{ name: 'Integração', area: 'Pessoas' }, { name: 'Processos', area: 'Operações' }] });
     if (pathname.endsWith('/kb-status')) return send(maintenance ? { running: true, phase: 'rebuilding_index', total: 12, indexed: 0, processed: 2 } : { index_ready: true });
@@ -48,6 +48,7 @@ const documents = titles.map((title, i) => ({
       if (failure) return send({ detail: 'Falha de conexão simulada.' }, 503);
       let list = noDocuments ? [] : documents.filter((d) => (!q.get('busca') || d.title.toLowerCase().includes(q.get('busca').toLowerCase())) && (!q.get('area') || d.area === q.get('area')) && (!q.get('categoria') || d.categoria === q.get('categoria')) && (!q.get('tag') || d.tags.includes(q.get('tag'))));
       if (q.get('busca') === 'Guia') await new Promise((r) => setTimeout(r, 450));
+      if (maintenance) await new Promise((r) => setTimeout(r, 400));
       return send({ documentos: list.slice(Number(q.get('offset')), Number(q.get('offset')) + Number(q.get('limit'))), total: list.length, pending_total: list.filter((d) => d.pending_approval).length });
     }
     if (pathname.endsWith('/conteudo')) return send({ ...documents[0], content: '# Guia de integração\n\nConheça os processos, as pessoas e as ferramentas da equipe.\n\n' + 'Conteúdo de exemplo para testar a leitura.\n'.repeat(12) });
@@ -160,7 +161,10 @@ const documents = titles.map((title, i) => ({
     assert.equal(await page.locator('.doc-item-processing').count(), 1);
     await page.locator('button.status-tag-failed').click(); await page.locator('#docViewerModal.open').waitFor();
     await page.keyboard.press('Escape');
-    queue = false; noDocuments = true; maintenance = true; await gotoHome();
+    queue = false; noDocuments = true; maintenance = true;
+    await page.locator('.menu-item[data-session="dashboardSession"]').click();
+    await page.waitForFunction(() => document.querySelector('#docsPagerInfo')?.textContent === 'Atualizando documentos... 2 de 12');
+    await settle();
     assert(await page.locator('#kbStatusAlert').isVisible());
     await page.getByText('Preparando sua biblioteca', { exact: true }).waitFor();
     maintenance = false; await gotoHome();

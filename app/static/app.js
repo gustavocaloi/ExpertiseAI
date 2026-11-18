@@ -190,6 +190,9 @@ const pagination = {
 };
 let docsSearchDebounceTimer = null;
 let docsRequestId = 0;
+let docsUpdatingRequestId = 0;
+let docsKbStatusPollTimer = null;
+const KB_STATUS_POLL_MS = 2000;
 const ACCESS_ROLE_OPTIONS = ['admin', 'editor', 'aprovador'];
 let companyUsersCache = [];
 let companyUserAuditCache = [];
@@ -415,12 +418,53 @@ function updateDashboardApprovalStatus() {
   setStatus('Sem pendências de aprovação');
 }
 
+function kbStatusProgressCounts(status = {}) {
+  const indexedRaw = Number(status?.indexed ?? status?.indexed_count);
+  const totalRaw = Number(status?.total ?? status?.meta_count);
+  const processedRaw = status?.processed == null
+    ? indexedRaw
+    : Number(status.processed);
+  const indexed = Number.isFinite(indexedRaw) && indexedRaw >= 0 ? Math.floor(indexedRaw) : 0;
+  const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.floor(totalRaw) : 0;
+  const processed = Number.isFinite(processedRaw) && processedRaw >= 0 ? Math.floor(processedRaw) : 0;
+  return {
+    indexed,
+    processed: total ? Math.min(processed, total) : processed,
+    total,
+  };
+}
+
+function formatDocsUpdatingMessage(status = {}) {
+  const running = Boolean(status?.running);
+  const { processed, total } = kbStatusProgressCounts(status);
+  if (!total || (!running && status?.index_ready !== false)) {
+    return 'Atualizando documentos...';
+  }
+  return `Atualizando documentos... ${processed.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')}`;
+}
+
+function stopDocsKbStatusPoll() {
+  if (docsKbStatusPollTimer == null) {
+    return;
+  }
+  window.clearInterval(docsKbStatusPollTimer);
+  docsKbStatusPollTimer = null;
+}
+
+function applyDocsUpdatingProgress(status, requestId) {
+  if (requestId !== docsRequestId || requestId !== docsUpdatingRequestId) {
+    return;
+  }
+  if (docsPagerInfo) {
+    docsPagerInfo.textContent = formatDocsUpdatingMessage(status);
+  }
+  updateKbStatusAlert(status);
+}
+
 function formatKbStatusMessage(status = {}) {
   const phase = String(status?.phase || '').trim();
   const running = Boolean(status?.running);
-  const indexed = Number(status?.indexed ?? status?.indexed_count ?? 0);
-  const total = Number(status?.total ?? status?.meta_count ?? 0);
-  const processed = Number(status?.processed ?? 0);
+  const { indexed, processed, total } = kbStatusProgressCounts(status);
   const errors = Number(status?.errors ?? 0);
   const suffix = total > 0
     ? ` (${Math.min(processed || indexed, total)}/${total} verificados, ${indexed} indexados${errors ? `, ${errors} erro(s)` : ''})`
@@ -3638,6 +3682,8 @@ function renderDocumentsState(title, description, retry = false) {
 async function loadPublishedDocs() {
   if (!hasModule('conteudo')) { docsList?.replaceChildren(); return; }
   const requestId = ++docsRequestId;
+  docsUpdatingRequestId = requestId;
+  stopDocsKbStatusPoll();
   docsList.setAttribute('aria-busy', 'true');
   docsPrevButton.disabled = true;
   docsNextButton.disabled = true;
@@ -3678,9 +3724,25 @@ async function loadPublishedDocs() {
     return areaOk && categoriaOk && tagOk && buscaOk;
   };
 
+  let kbStatusData = {};
+  const fetchKbStatus = async () => {
+    try {
+      const status = await apiFetch(`/api/v1/empresas/${state.companyId}/kb-status`);
+      if (requestId !== docsRequestId) return;
+      kbStatusData = status && typeof status === 'object' ? status : {};
+      applyDocsUpdatingProgress(kbStatusData, requestId);
+    } catch {
+      if (requestId !== docsRequestId) return;
+    }
+  };
+  void fetchKbStatus();
+  docsKbStatusPollTimer = window.setInterval(() => {
+    void fetchKbStatus();
+  }, KB_STATUS_POLL_MS);
+
   try {
     const canLoadUploadQueue = canViewUploadQueue();
-    const [data, processingData, failedData, kbStatusData] = await Promise.all([
+    const [data, processingData, failedData] = await Promise.all([
       apiFetch(`/api/v1/empresas/${state.companyId}/documentos?${query.toString()}`),
       canLoadUploadQueue
         ? apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=processing`)
@@ -3688,8 +3750,11 @@ async function loadPublishedDocs() {
       canLoadUploadQueue
         ? apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=failed`)
         : Promise.resolve({ documentos: [] }),
-      apiFetch(`/api/v1/empresas/${state.companyId}/kb-status`).catch(() => ({})),
     ]);
+    if (requestId === docsUpdatingRequestId) {
+      docsUpdatingRequestId = 0;
+    }
+    stopDocsKbStatusPoll();
     if (requestId !== docsRequestId) return;
     updateKbStatusAlert(kbStatusData);
     docsList.innerHTML = '';
@@ -3874,6 +3939,10 @@ async function loadPublishedDocs() {
       docsList.appendChild(item);
     }
   } catch (error) {
+    if (requestId === docsUpdatingRequestId) {
+      docsUpdatingRequestId = 0;
+    }
+    stopDocsKbStatusPoll();
     if (requestId !== docsRequestId) return;
     state.pendingApprovalTotal = 0;
     updateDashboardApprovalStatus();
@@ -3881,6 +3950,10 @@ async function loadPublishedDocs() {
     docsPagerInfo.textContent = 'Não foi possível atualizar a lista.';
     renderDocumentsState('Não foi possível carregar os documentos', error.message, true);
   } finally {
+    if (requestId === docsUpdatingRequestId) {
+      docsUpdatingRequestId = 0;
+    }
+    stopDocsKbStatusPoll();
     if (requestId === docsRequestId) docsList.setAttribute('aria-busy', 'false');
   }
 }
