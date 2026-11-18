@@ -5032,16 +5032,26 @@ mon('Audio').addEventListener('error', () => {
 });
 mon('LoadAudio').addEventListener('click', () => monitoriaRun(async () => {
   const uuid = monitoriaState.selectedUuid, detailId = monitoriaState.detailId;
-  const button = mon('LoadAudio'); button.disabled = true; button.textContent = 'Carregando…';
+  const button = mon('LoadAudio');
+  const audio = mon('Audio');
+  button.disabled = true; button.textContent = 'Carregando…';
   try {
     const response = await fetch(monitoriaCompanyPath(`/conversas/${uuid}/audio`), { headers: state.token ? { Authorization: `Bearer ${state.token}` } : {} });
     if (!response.ok) throw new Error('Não foi possível carregar o áudio. Atualize sua sessão e tente novamente.');
     const blob = await response.blob();
     if (detailId !== monitoriaState.detailId) return;
     if (monitoriaState.audioUrl) URL.revokeObjectURL(monitoriaState.audioUrl);
-    monitoriaState.audioUrl = URL.createObjectURL(blob); mon('Audio').src = monitoriaState.audioUrl;
+    monitoriaState.audioUrl = URL.createObjectURL(blob);
+    audio.src = monitoriaState.audioUrl;
     mon('PlayPause').classList.remove('hidden-view'); button.classList.add('hidden-view');
-    mon('AudioStatus').textContent = 'Preparando áudio…';
+    mon('AudioStatus').textContent = 'Reproduzindo…';
+    try {
+      // Start playback in the same click flow so only one press is needed.
+      await audio.play();
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      mon('AudioStatus').textContent = 'Áudio carregado. Use Reproduzir para continuar.';
+    }
   } catch (error) {
     if (detailId === monitoriaState.detailId) { mon('AudioStatus').textContent = error.message; throw error; }
   } finally { if (detailId === monitoriaState.detailId) { button.disabled = false; button.textContent = '▶ Ouvir áudio'; } }
