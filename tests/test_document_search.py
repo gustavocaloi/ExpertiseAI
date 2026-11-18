@@ -153,3 +153,74 @@ def test_delete_removes_fts_entry(isolated_store):
 
     services.delete_document(company_id, "geral", "ops", "temporario")
     assert created["document_uuid"] not in db.search_document_uuids(company_id, "removivel")
+
+
+def test_listing_uses_existing_index_without_rebuild(isolated_store, monkeypatch):
+    company_id = 1
+    created = _create_doc(company_id, title="Manual", content="procedimento", slug="manual")
+
+    def fail_rebuild(*_args, **_kwargs):
+        raise AssertionError("a listagem nao deve reconstruir o indice")
+
+    monkeypatch.setattr(services, "_rebuild_documents_index", fail_rebuild)
+    monkeypatch.setattr(services, "_count_document_meta_files_cached", fail_rebuild)
+    page = services.read_published_documents(
+        company_id=company_id,
+        include_content=False,
+        return_total=True,
+    )
+    assert page["total"] == 1
+    assert page["items"][0]["document_uuid"] == created["document_uuid"]
+
+
+def test_listing_returns_empty_when_index_is_missing(isolated_store, monkeypatch):
+    company_id = 1
+    (services._company_root(company_id)).mkdir(parents=True, exist_ok=True)
+
+    def fail_rebuild(*_args, **_kwargs):
+        raise AssertionError("listagem sem indice nao deve varrer o disco")
+
+    monkeypatch.setattr(services, "_rebuild_documents_index", fail_rebuild)
+    page = services.read_published_documents(
+        company_id=company_id,
+        include_content=False,
+        return_total=True,
+    )
+    assert page["total"] == 0
+    assert page["items"] == []
+
+
+def test_kb_status_counts_new_storage_when_legacy_dirs_remain(isolated_store):
+    services._KB_MAINTENANCE_STATUS.clear()
+    company_id = 1
+    _create_doc(company_id, title="Manual", content="procedimento", slug="manual")
+    leftover = services._company_root(company_id) / "area-antiga"
+    leftover.mkdir()
+    assert services._company_has_legacy_document_dirs(company_id) is True
+    status = services.get_kb_maintenance_status(company_id)
+    assert status["meta_count"] == 1
+    assert status["indexed_count"] == 1
+    assert status["index_ready"] is True
+
+
+def test_kb_status_skips_disk_walk_while_rebuild_is_running(isolated_store, monkeypatch):
+    services._set_kb_maintenance_status(
+        1,
+        running=True,
+        phase="migrating_documents",
+        processed=3,
+        total=10,
+        indexed=3,
+    )
+
+    def fail_disk_walk(*_args, **_kwargs):
+        raise AssertionError("kb-status não deve varrer o disco durante a manutenção")
+
+    monkeypatch.setattr(services, "_read_documents_index", fail_disk_walk)
+    monkeypatch.setattr(services, "_count_document_meta_files_cached", fail_disk_walk)
+    status = services.get_kb_maintenance_status(1)
+    assert status["running"] is True
+    assert status["total"] == 10
+    assert status["processed"] == 3
+    assert status["index_ready"] is False
+    services._KB_MAINTENANCE_STATUS.clear()

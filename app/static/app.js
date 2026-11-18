@@ -435,12 +435,11 @@ function kbStatusProgressCounts(status = {}) {
 }
 
 function formatDocsUpdatingMessage(status = {}) {
-  const running = Boolean(status?.running);
   const { processed, total } = kbStatusProgressCounts(status);
-  if (!total || (!running && status?.index_ready !== false)) {
-    return 'Atualizando documentos...';
+  if (total > 0) {
+    return `Atualizando documentos... ${processed.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')}`;
   }
-  return `Atualizando documentos... ${processed.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')}`;
+  return 'Atualizando documentos...';
 }
 
 function stopDocsKbStatusPoll() {
@@ -3948,7 +3947,14 @@ async function loadPublishedDocs() {
     updateDashboardApprovalStatus();
     document.getElementById('docsCount').textContent = '—';
     docsPagerInfo.textContent = 'Não foi possível atualizar a lista.';
-    renderDocumentsState('Não foi possível carregar os documentos', error.message, true);
+    const timeoutProxy = /524/.test(String(error?.message || ''));
+    renderDocumentsState(
+      'Não foi possível carregar os documentos',
+      timeoutProxy
+        ? 'O proxy encerrou a espera (524) enquanto o índice era preparado. Tente novamente em alguns minutos.'
+        : error.message,
+      true,
+    );
   } finally {
     if (requestId === docsUpdatingRequestId) {
       docsUpdatingRequestId = 0;

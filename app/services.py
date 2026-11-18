@@ -130,6 +130,18 @@ def _set_kb_maintenance_status(company_id: int, **updates: Any) -> None:
 def get_kb_maintenance_status(company_id: int) -> Dict[str, Any]:
     with _KB_MAINTENANCE_STATUS_LOCK:
         current = dict(_KB_MAINTENANCE_STATUS.get(company_id, {}))
+    running = bool(current.get("running"))
+    if running:
+        indexed_count = int(current.get("indexed") or current.get("indexed_count") or 0)
+        meta_count = int(current.get("total") or current.get("meta_count") or 0)
+        current.setdefault("company_id", company_id)
+        current.setdefault("phase", "idle")
+        current.setdefault("processed", indexed_count)
+        current.setdefault("errors", 0)
+        current["meta_count"] = meta_count
+        current["indexed_count"] = indexed_count
+        current["index_ready"] = False
+        return current
     index_items = _read_documents_index(company_id)
     meta_count = _count_document_meta_files_cached(company_id) if _company_root(company_id).exists() else 0
     indexed_count = len(index_items)
@@ -268,8 +280,11 @@ def _count_document_meta_files_cached(company_id: int) -> int:
         cached_at, cached_count = cached
         if now - cached_at < _DOCUMENT_META_COUNT_TTL_SECONDS:
             return cached_count
-    if not _company_has_legacy_document_dirs(company_id):
+    if _documents_root(company_id).exists():
         return _count_new_storage_meta_files(company_id)
+    if not _company_has_legacy_document_dirs(company_id):
+        _DOCUMENT_META_COUNT_CACHE[company_id] = (now, 0)
+        return 0
     total = len(list(_iter_document_meta_files(company_id)))
     _DOCUMENT_META_COUNT_CACHE[company_id] = (now, total)
     return total
@@ -828,36 +843,17 @@ def _rebuild_documents_index(company_id: int) -> list[Dict[str, Any]]:
 
 
 def _ensure_documents_index(company_id: int) -> list[Dict[str, Any]]:
-    with _document_index_lock(company_id):
-        payload = _read_documents_index_payload(company_id)
-        items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        schema_version = int(payload.get("schema_version") or 0)
-        schema_ok = schema_version == DOCUMENT_INDEX_SCHEMA_VERSION
-        if items and schema_ok and all(isinstance(item, dict) and "document_uuid" in item for item in items):
-            meta_count = _count_document_meta_files_cached(company_id)
-            if len(items) >= meta_count:
-                if db.count_company_document_search(company_id) < len(items):
-                    logger.warning(
-                        "Empresa %s: indice FTS atrasado em relacao ao JSON. Rebuild iniciado.",
-                        company_id,
-                    )
-                    return _rebuild_documents_index(company_id)
-                _ensure_taxonomies_from_index(company_id, items)
-                return items
-            logger.warning(
-                "Empresa %s: indice de documentos inconsistente. indexados=%s metas=%s. Rebuild iniciado.",
-                company_id,
-                len(items),
-                meta_count,
-            )
-        elif items and not schema_ok:
-            logger.info(
-                "Empresa %s: indice JSON em schema %s; migrando para schema %s.",
-                company_id,
-                schema_version,
-                DOCUMENT_INDEX_SCHEMA_VERSION,
-            )
-        return _rebuild_documents_index(company_id)
+    payload = _read_documents_index_payload(company_id)
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    usable = [item for item in items if isinstance(item, dict) and item.get("document_uuid")]
+    if usable:
+        _ensure_taxonomies_from_index(company_id, usable)
+        return usable
+    logger.warning(
+        "Empresa %s: listagem sem indice JSON utilizavel; retornando vazio ate a manutencao de startup terminar.",
+        company_id,
+    )
+    return []
 
 
 def _upsert_documents_index_entry(company_id: int, meta: Dict[str, Any]) -> None:
@@ -1416,6 +1412,36 @@ def migrate_documents_storage_layout(company_id: Optional[int] = None) -> int:
             logger.info("Empresa %s: migração ignorada porque já foi executada neste processo.", current_company_id)
             continue
         company_t0 = time.perf_counter()
+        _set_kb_maintenance_status(
+            current_company_id,
+            running=True,
+            phase="migrating_documents",
+            processed=0,
+            total=0,
+            indexed=0,
+            errors=0,
+        )
+        existing_indexed_count = len(_read_documents_index(current_company_id))
+        cheap_total = (
+            _count_new_storage_meta_files(current_company_id)
+            if _documents_root(current_company_id).exists()
+            else existing_indexed_count
+        )
+        _set_kb_maintenance_status(
+            current_company_id,
+            running=True,
+            phase="migrating_documents",
+            processed=0,
+            total=cheap_total,
+            indexed=existing_indexed_count,
+            errors=0,
+        )
+        logger.info(
+            "Empresa %s: avaliando layout e indice. indexados=%s metas_novas=%s",
+            current_company_id,
+            existing_indexed_count,
+            cheap_total,
+        )
         with _document_index_lock(current_company_id):
             if _documents_index_is_current_for_new_storage(current_company_id):
                 current_items = _read_documents_index(current_company_id)
