@@ -28,6 +28,18 @@ Principais entidades:
 - `user_company_roles`
 - tabelas de restricao por area e perfis reutilizaveis
 - trilha de auditoria de acessos
+- tabelas `monitoria_*` (centrais, equipes, memberships, pilares, conversas, turnos, scores e jobs)
+
+### Monitoria de atendimento
+
+O modulo de monitoria e um dominio separado da base de conhecimento:
+
+- metadados e resultados em SQLite (`monitoria_*`);
+- arquivos de audio em `data/monitoria_store/<empresa_id>/<conversation_uuid>/`;
+- pipeline assincrono: upload -> transcricao -> avaliacao por pilar -> scores;
+- provedor de IA plugavel (`EXPAI_AI_PROVIDER`, padrao `mock` na fase 1);
+- hierarquia `Empresa -> Central -> Equipe -> Operador`, com `cliente` como dimensao de filtro do ticket;
+- papeis proprios (`monitoria_admin`, `monitoria_supervisor`, `monitoria_analista`, `monitoria_operador`); admins da KB tem acesso total ao modulo.
 
 ## Identidade do documento
 
@@ -58,13 +70,32 @@ A migracao preserva:
 
 ## Otimizacoes de performance
 
-Cada empresa possui um indice local:
+Cada empresa possui um indice local leve:
 
-- `data/kb_store/<empresa_id>/_documents.index.json`
+- `data/kb_store/<empresa_id>/_documents.index.json` (`schema_version: 2`)
 
-Esse indice acelera:
+Esse indice guarda metadados (sem o corpo Markdown) e acelera:
 
 - paginacao
 - filtros por area, categoria e tag
-- busca textual
+- ordenacao
 - abertura de documentos por resolucao mais rapida de metadados
+
+A listagem aplica filtros e `offset`/`limit` antes de carregar o conteudo.
+Por padrao as rotas de listagem usam `include_content=true` e leem o Markdown
+apenas dos itens da pagina atual (em paralelo, sem reler `document.meta.json`).
+Use `include_content=false` quando o cliente precisar so de metadados.
+
+### Busca textual (FTS5)
+
+A busca por `busca` usa o indice SQLite FTS5 `document_search_fts` em `system.sqlite3`.
+
+- sincronizado na publicacao/edicao/exclusao e no rebuild do indice JSON;
+- cobre titulo, slug, area, categoria, tags e corpo da versao selecionada;
+- indices JSON antigos (sem `schema_version: 2`) sao migrados no proximo acesso.
+
+Para medir latencia local (p50/p95) com 1k/5k/10k documentos:
+
+```bash
+python scripts/bench_document_search.py --sizes 1000,5000,10000 --rounds 30
+```

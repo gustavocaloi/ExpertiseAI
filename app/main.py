@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db, services
-from . import kb_routes, routers
+from . import kb_routes, monitoria_routes, monitoria_services, routers
 from .config import (
     ACCESS_CONTROL_ENABLED,
     ALLOW_PUBLIC_COMPANY_CREATE,
@@ -31,6 +31,8 @@ from .config import (
 )
 from .mcp_server import create_mcp_component
 from .security import hash_password
+from . import backup_routes, backup_services
+from .maintenance import StorageMaintenanceMiddleware, storage_access, MaintenanceBusy
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +84,21 @@ def _install_ordered_openapi(app: FastAPI) -> None:
 
 async def _upload_jobs_cleanup_loop() -> None:
     while True:
-        kb_routes.cleanup_zombie_upload_jobs()
+        try:
+            with storage_access():
+                kb_routes.cleanup_zombie_upload_jobs()
+                monitoria_services.cleanup_zombie_monitoria_jobs()
+        except MaintenanceBusy:
+            pass
         await asyncio.sleep(30)
 
 
 def _run_kb_startup_maintenance_sync() -> None:
+    with storage_access():
+        _run_kb_startup_maintenance_locked()
+
+
+def _run_kb_startup_maintenance_locked() -> None:
     step_t0 = time.perf_counter()
     if REBUILD_KB_ON_START:
         logger.info("Startup maintenance: rebuild_documents_from_markdown_files iniciado.")
@@ -128,13 +140,15 @@ def create_app() -> FastAPI:
         version="0.1.0",
         servers=openapi_servers,
     )
-    mcp_component = create_mcp_component()
+    mcp_component = create_mcp_component(openapi_provider=lambda: app.openapi())
     static_dir = Path(__file__).resolve().parent / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
 
     step_t0 = time.perf_counter()
     logger.info("Startup step: init_db iniciado.")
-    db.init_db()
+    with storage_access(exclusive=True, blocking=True):
+        backup_services.recover_restore()
+        db.init_db()
     logger.info("Startup step: init_db concluido em %.2fs.", time.perf_counter() - step_t0)
 
     step_t0 = time.perf_counter()
@@ -145,19 +159,23 @@ def create_app() -> FastAPI:
     if BOOTSTRAP_DEFAULT_ADMIN:
         step_t0 = time.perf_counter()
         logger.info("Startup step: ensure_default_admin iniciado.")
-        db.ensure_default_admin(
-            company_name=DEFAULT_COMPANY_NAME,
-            company_description=DEFAULT_COMPANY_DESCRIPTION,
-            company_slug=DEFAULT_COMPANY_SLUG,
-            admin_name=DEFAULT_ADMIN_NAME,
-            admin_email=DEFAULT_ADMIN_EMAIL,
-            admin_password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
-        )
+        with storage_access(exclusive=True, blocking=True):
+            db.ensure_default_admin(
+                company_name=DEFAULT_COMPANY_NAME,
+                company_description=DEFAULT_COMPANY_DESCRIPTION,
+                company_slug=DEFAULT_COMPANY_SLUG,
+                admin_name=DEFAULT_ADMIN_NAME,
+                admin_email=DEFAULT_ADMIN_EMAIL,
+                admin_password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
+            )
         logger.info("Startup step: ensure_default_admin concluido em %.2fs.", time.perf_counter() - step_t0)
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     app.include_router(routers.router, prefix="/api/v1")
+    app.include_router(backup_routes.router, prefix="/api/v1")
+    app.add_middleware(StorageMaintenanceMiddleware)
     app.include_router(kb_routes.router, prefix="/api/v1")
+    app.include_router(monitoria_routes.router, prefix="/api/v1")
     app.include_router(kb_routes.router_v2, prefix="/api/v2")
     if mcp_component is not None:
         app.mount(mcp_component.mount_path, mcp_component.app, name="mcp")
@@ -193,13 +211,29 @@ def create_app() -> FastAPI:
             )
             app.state.kb_startup_maintenance_task = asyncio.create_task(_run_kb_startup_maintenance())
         cleanup_t0 = time.perf_counter()
-        cleaned = kb_routes.cleanup_zombie_upload_jobs()
-        logger.info("Startup event: cleanup_zombie_upload_jobs concluido em %.2fs. limpos=%s", time.perf_counter() - cleanup_t0, cleaned)
+        cleaned = monitoria_cleaned = 0
+        try:
+            with storage_access():
+                cleaned = kb_routes.cleanup_zombie_upload_jobs()
+                monitoria_cleaned = monitoria_services.cleanup_zombie_monitoria_jobs()
+        except MaintenanceBusy:
+            pass
+        logger.info(
+            "Startup event: cleanup_zombie_upload_jobs concluido em %.2fs. limpos=%s monitoria=%s",
+            time.perf_counter() - cleanup_t0,
+            cleaned,
+            monitoria_cleaned,
+        )
         app.state.upload_jobs_cleanup_task = asyncio.create_task(_upload_jobs_cleanup_loop())
+        app.state.monitoria_batch_worker = monitoria_services.start_batch_worker()
         logger.info("Startup event completo em %.2fs.", time.perf_counter() - startup_event_t0)
 
     @app.on_event("shutdown")
     async def shutdown_cleanup_upload_jobs() -> None:
+        batch_worker = getattr(app.state, "monitoria_batch_worker", None)
+        if batch_worker:
+            batch_worker.cancel()
+            await asyncio.gather(batch_worker, return_exceptions=True)
         task = getattr(app.state, "upload_jobs_cleanup_task", None)
         if task:
             task.cancel()

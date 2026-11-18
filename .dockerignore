@@ -12,3 +12,5 @@ README.md
 *.sqlite3
 feat.md
 .DS_Store
+AGENTS.md
+SKILL.md

@@ -14,12 +14,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import db, services
+from .maintenance import background_storage
 from .config import ACCESS_CONTROL_ENABLED, DATA_DIR
-from .security import TokenData, require_company_access, require_role, user_has_required_role
+from .security import TokenData, require_company_access, require_role, user_has_required_role, require_content_module
 
 
-router = APIRouter()
-router_v2 = APIRouter()
+router = APIRouter(dependencies=[Depends(require_content_module)])
+router_v2 = APIRouter(dependencies=[Depends(require_content_module)])
 _UPLOAD_JOBS: dict[str, dict[str, Any]] = {}
 _ACTIVE_UPLOAD_JOBS: set[str] = set()
 _UPLOAD_JOBS_DIR = Path(DATA_DIR) / "_upload_jobs"
@@ -333,7 +334,10 @@ def list_documents(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     sort: str = Query(default="created_desc"),
-    include_content: bool = Query(default=False),
+    include_content: bool = Query(
+        default=True,
+        description="Inclui o conteudo Markdown do documento na resposta (apenas da pagina atual).",
+    ),
     include_unpublished: bool = Query(default=True),
     user: TokenData = Depends(require_company_access),
 ):
@@ -373,6 +377,15 @@ def list_documents(
     }
 
 
+@router.get("/empresas/{company_id}/kb-status", tags=["documentos"])
+def get_company_kb_status(
+    company_id: int,
+    user: TokenData = Depends(require_company_access),
+):
+    _is_scoped_access_allowed(company_id, user)
+    return services.get_kb_maintenance_status(company_id)
+
+
 @router.get("/empresas/{company_id}/documentos/publicados", tags=["documentos"])
 def list_published_documents(
     company_id: int,
@@ -383,7 +396,10 @@ def list_published_documents(
     limit: int = Query(default=10, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     sort: str = Query(default="created_desc"),
-    include_content: bool = Query(default=False),
+    include_content: bool = Query(
+        default=True,
+        description="Inclui o conteudo Markdown do documento na resposta (apenas da pagina atual).",
+    ),
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
@@ -453,7 +469,10 @@ def list_published_documents_v2(
         description="Quantidade de documentos publicados a ignorar antes de retornar a pagina atual.",
     ),
     sort: str = Query(default="created_desc", description="Ordenacao da listagem."),
-    include_content: bool = Query(default=False, description="Inclui o conteudo do documento na resposta."),
+    include_content: bool = Query(
+        default=True,
+        description="Inclui o conteudo Markdown do documento na resposta (apenas da pagina atual).",
+    ),
     user: TokenData = Depends(require_company_access),
 ):
     _is_scoped_access_allowed(company_id, user)
@@ -738,6 +757,7 @@ async def upload_document(
         }
         _persist_upload_job(job_id, _UPLOAD_JOBS[job_id])
 
+        @background_storage
         async def run_job() -> None:
             _ACTIVE_UPLOAD_JOBS.add(job_id)
             try:

@@ -18,7 +18,8 @@ Foi pensada para times que precisam transformar documentos dispersos em uma base
 - Controle de acesso por perfil e por area de documento.
 - Conversao de PDF e DOCX para Markdown com `docling`.
 - Busca, filtros e navegacao otimizados para alto volume de documentos.
-- Servidor MCP seguro para consulta da base publicada por agentes de IA.
+- Servidor MCP autenticado para consulta da base publicada, operação da Monitoria e descoberta dos contratos das APIs.
+- Modulo de **Monitoria** de atendimento: upload de áudios em lote com fila assíncrona persistida, transcricao, pilares/agentes de IA e telemetria por interacao (fase 1 com provedor `mock`).
 
 ## Casos de uso
 
@@ -41,6 +42,8 @@ Foi pensada para times que precisam transformar documentos dispersos em uma base
 - `admin`: acesso total, incluindo gestao de usuarios, restricoes e criacao de empresas.
 - `editor`: cria, edita e exclui documentos, areas e categorias.
 - `aprovador`: revisa versoes pendentes e publica documentos.
+
+Perfis do modulo Monitoria (por membership): `monitoria_admin`, `monitoria_supervisor`, `monitoria_analista`, `monitoria_operador`. A flag `EXPAI_MONITORIA_REAL_AI_ENABLED=false` (padrão) mantém o módulo disponível e força novas análises mockadas, sem chamadas externas. Com `true`, novos uploads exigem um provedor real implementado; os adapters reais ainda estão pendentes. `EXPAI_AI_PROVIDER` define o provedor inicial para empresas sem configuração própria. Consulte [Monitoria](docs/monitoria.md#flag-de-ia-real).
 
 ## Inicio rapido
 
@@ -180,3 +183,14 @@ Indicado para imagem completa, com foco em operacao offline.
 ## Licenca
 
 Este projeto esta licenciado sob a [MIT License](LICENSE).
+
+O MVP simulado está disponível em **Monitoria → Carregar demonstração**. Consulte [fluxos, APIs e limitações](docs/monitoria.md).
+
+
+### Docker local e arquivos sob demanda no macOS
+
+Se o container reportar `disk I/O error` no SQLite ou nos documentos, verifique se os arquivos de `data/` estão disponíveis localmente. Nesta máquina, arquivos marcados `dataless` no diretório compartilhado impediram leituras pelo Docker. Materialize os arquivos pelo macOS antes de reiniciar; preserve o banco e faça backup antes de qualquer reparo. Reiniciar ou reconstruir a imagem não substitui a recuperação do acesso aos arquivos. O comando `ls -lO data/system.sqlite3` ajuda a identificar o estado do arquivo; `/health` sozinho não comprova a leitura completa da base.
+
+## Backup e restauração
+
+Administradores de todas as empresas podem exportar e restaurar a plataforma em JSON pelo menu do usuário → **Backup e restauração**. Inclui usuários, senhas protegidas por hash, permissões, documentos, anexos e Monitoria. Restaurar substitui os dados atuais e exige novo login. Consulte [formato, permissões, limites e recuperação](docs/backup.md).

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import sqlite3
 from datetime import datetime
 from typing import Optional
@@ -18,6 +19,8 @@ ROLE_PRIORITY = {
     "editor": 2,
     "admin": 3,
 }
+_FTS_TOKEN_RE = re.compile(r"[0-9A-Za-zÀ-ÿ_]+", re.UNICODE)
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -36,11 +39,179 @@ def resolve_effective_role(roles: list[str]) -> Optional[str]:
     return max(normalized_roles, key=lambda role: ROLE_PRIORITY.get(role, 0))
 
 
+def is_platform_admin(user_id: int) -> bool:
+    """A global operation requires active admin access to every registered company."""
+    conn = get_connection()
+    try:
+        return bool(conn.execute(
+            """SELECT EXISTS(SELECT 1 FROM companies)
+               AND NOT EXISTS (
+                   SELECT 1 FROM companies c WHERE NOT EXISTS (
+                       SELECT 1 FROM user_company_roles r
+                       WHERE r.company_id=c.id AND r.user_id=?
+                         AND r.role='admin' AND r.is_active=1))""", (user_id,)
+        ).fetchone()[0])
+    finally:
+        conn.close()
+
+
 def get_connection() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+    except sqlite3.Error:
+        logger.exception("Falha ao aplicar PRAGMAs do SQLite.")
     return conn
+
+
+def build_fts_match_query(term: str) -> str:
+    tokens = _FTS_TOKEN_RE.findall(str(term or "").lower())
+    if not tokens:
+        return ""
+    parts: list[str] = []
+    for token in tokens:
+        safe = token.replace('"', '""')
+        parts.append(f'"{safe}"*')
+    return " AND ".join(parts)
+
+
+def upsert_document_search(
+    company_id: int,
+    document_uuid: str,
+    title: str = "",
+    slug: str = "",
+    area: str = "",
+    categoria: str = "",
+    tags: str = "",
+    body: str = "",
+) -> None:
+    document_uuid_value = str(document_uuid or "").strip()
+    if not document_uuid_value:
+        return
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM document_search_fts WHERE company_id = ? AND document_uuid = ?",
+            (str(int(company_id)), document_uuid_value),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_search_fts
+            (document_uuid, company_id, title, slug, area, categoria, tags, body)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                document_uuid_value,
+                str(int(company_id)),
+                str(title or ""),
+                str(slug or ""),
+                str(area or ""),
+                str(categoria or ""),
+                str(tags or ""),
+                str(body or ""),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_document_search(company_id: int, document_uuid: Optional[str]) -> None:
+    document_uuid_value = str(document_uuid or "").strip()
+    if not document_uuid_value:
+        return
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM document_search_fts WHERE company_id = ? AND document_uuid = ?",
+            (str(int(company_id)), document_uuid_value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def replace_company_document_search(company_id: int, rows: list[dict]) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM document_search_fts WHERE company_id = ?",
+            (str(int(company_id)),),
+        )
+        payload = []
+        for row in rows:
+            document_uuid_value = str(row.get("document_uuid") or "").strip()
+            if not document_uuid_value:
+                continue
+            payload.append(
+                (
+                    document_uuid_value,
+                    str(int(company_id)),
+                    str(row.get("title") or ""),
+                    str(row.get("slug") or ""),
+                    str(row.get("area") or ""),
+                    str(row.get("categoria") or ""),
+                    str(row.get("tags") or ""),
+                    str(row.get("body") or ""),
+                )
+            )
+        if payload:
+            conn.executemany(
+                """
+                INSERT INTO document_search_fts
+                (document_uuid, company_id, title, slug, area, categoria, tags, body)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_company_document_search(company_id: int) -> int:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total FROM document_search_fts WHERE company_id = ?",
+            (str(int(company_id)),),
+        ).fetchone()
+        return int(row["total"] if row else 0)
+    finally:
+        conn.close()
+
+
+def search_document_uuids(company_id: int, term: str, limit: int = 10000) -> list[str]:
+    match_query = build_fts_match_query(term)
+    if not match_query:
+        return []
+    safe_limit = max(1, min(int(limit or 1), 50000))
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT document_uuid
+            FROM document_search_fts
+            WHERE company_id = ?
+              AND document_search_fts MATCH ?
+            ORDER BY bm25(document_search_fts)
+            LIMIT ?
+            """,
+            (str(int(company_id)), match_query, safe_limit),
+        ).fetchall()
+        return [str(row["document_uuid"]) for row in rows if row["document_uuid"]]
+    except sqlite3.Error:
+        logger.exception(
+            "Falha na busca FTS da empresa %s para termo %r.",
+            company_id,
+            term,
+        )
+        return []
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -234,6 +405,30 @@ def init_db() -> None:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS document_search_fts USING fts5(
+                document_uuid UNINDEXED,
+                company_id UNINDEXED,
+                title,
+                slug,
+                area,
+                categoria,
+                tags,
+                body,
+                tokenize='unicode61'
+            )
+            """
+        )
+        cur.execute("""CREATE TABLE IF NOT EXISTS user_company_modules (
+            user_id INTEGER NOT NULL, company_id INTEGER NOT NULL,
+            modules TEXT NOT NULL, monitoria_role TEXT NOT NULL DEFAULT 'monitoria_analista',
+            PRIMARY KEY(user_id, company_id),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE)""")
+        from .monitoria_db import init_monitoria_tables
+
+        init_monitoria_tables(conn)
         conn.commit()
     finally:
         conn.close()
@@ -1070,6 +1265,7 @@ def list_users_in_company(company_id: int) -> list[dict]:
             item["role"] = resolve_effective_role(item["roles"]) or "-"
             scope_bundle = get_effective_user_area_scope(item["id"], company_id)
             scope = scope_bundle.get("effective_scope", {"mode": "all", "areas": []})
+            item.update(get_user_modules(item["id"], company_id))
             item["area_scope"] = scope
             item["area_scope_profiles"] = scope_bundle.get("assigned_profiles", [])
             item["area_scope_default"] = scope_bundle.get("default_scope", {"mode": "all", "areas": []})
@@ -1132,6 +1328,52 @@ def create_taxonomy(company_id: int, kind: str, name: str, parent_area: Optional
         )
         conn.commit()
         return cleaned
+    finally:
+        conn.close()
+
+
+def create_taxonomies_bulk(
+    company_id: int,
+    areas: list[str],
+    categorias: list[tuple[str, str]],
+) -> None:
+    now = _now()
+    area_rows = []
+    seen_areas: set[str] = set()
+    for area in areas:
+        cleaned = _taxonomy_normalize_name(area)
+        if not cleaned or cleaned in seen_areas:
+            continue
+        seen_areas.add(cleaned)
+        area_rows.append((company_id, "area", cleaned, now, ""))
+
+    category_rows = []
+    seen_categories: set[tuple[str, str]] = set()
+    for area, categoria in categorias:
+        cleaned_area = _taxonomy_normalize_name(area)
+        cleaned_categoria = _taxonomy_normalize_name(categoria)
+        if not cleaned_area or not cleaned_categoria:
+            continue
+        key = (cleaned_area, cleaned_categoria)
+        if key in seen_categories:
+            continue
+        seen_categories.add(key)
+        category_rows.append((company_id, "categoria", cleaned_categoria, now, cleaned_area))
+
+    if not area_rows and not category_rows:
+        return
+
+    conn = get_connection()
+    try:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO taxonomies
+            (company_id, kind, name, is_active, created_at, parent_area)
+            VALUES (?, ?, ?, 1, ?, ?)
+            """,
+            area_rows + category_rows,
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -1253,3 +1495,39 @@ def ensure_default_admin(
         conn.commit()
     finally:
         conn.close()
+
+
+MODULES = {"conteudo", "monitoria"}
+MONITORIA_ACCESS_ROLES = {"monitoria_admin", "monitoria_supervisor", "monitoria_analista", "monitoria_operador"}
+
+
+def get_user_modules(user_id: int, company_id: int) -> dict:
+    import json
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT modules, monitoria_role FROM user_company_modules WHERE user_id=? AND company_id=?", (user_id, company_id)).fetchone()
+        if row:
+            return {"modules": json.loads(row["modules"]), "monitoria_role": row["monitoria_role"], "modules_configured": True}
+        roles = get_user_roles_in_company(user_id, company_id)
+        memberships = conn.execute("SELECT role FROM monitoria_memberships WHERE user_id=? AND company_id=? AND is_active=1", (user_id, company_id)).fetchall()
+        rank = {"monitoria_operador": 1, "monitoria_analista": 2, "monitoria_supervisor": 3, "monitoria_admin": 4}
+        mr = max((r["role"] for r in memberships), key=lambda r: rank.get(r, 0), default="monitoria_analista")
+        return {"modules": (["conteudo"] + (["monitoria"] if memberships or "admin" in roles else [])) if roles else [],
+                "monitoria_role": "monitoria_admin" if "admin" in roles else mr, "modules_configured": False}
+    finally:
+        conn.close()
+
+
+def set_user_modules(user_id: int, company_id: int, modules: list[str], monitoria_role: str = "monitoria_analista") -> dict:
+    import json
+    if not set(modules) <= MODULES or monitoria_role not in MONITORIA_ACCESS_ROLES:
+        raise ValueError("Módulo ou perfil de Monitoria inválido")
+    conn = get_connection()
+    try:
+        conn.execute("""INSERT INTO user_company_modules(user_id,company_id,modules,monitoria_role) VALUES(?,?,?,?)
+            ON CONFLICT(user_id,company_id) DO UPDATE SET modules=excluded.modules, monitoria_role=excluded.monitoria_role""",
+            (user_id, company_id, json.dumps(sorted(set(modules))), monitoria_role))
+        conn.commit()
+    finally:
+        conn.close()
+    return get_user_modules(user_id, company_id)

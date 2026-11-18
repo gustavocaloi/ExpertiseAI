@@ -10,6 +10,7 @@ import shutil
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -51,14 +52,26 @@ _DOCUMENT_INDEX_LOCK_DEPTH = threading.local()
 _DOCUMENT_INDEX_REBUILDING = threading.local()
 _DOCUMENT_META_COUNT_CACHE: dict[int, tuple[float, int]] = {}
 _DOCUMENT_META_COUNT_TTL_SECONDS = 60.0
+_DOCUMENT_TAXONOMIES_HYDRATED: set[int] = set()
+_KB_MAINTENANCE_STATUS: dict[int, Dict[str, Any]] = {}
+_KB_MAINTENANCE_STATUS_LOCK = threading.Lock()
 _DOCLING_MAX_FILE_SIZE_BYTES = max(1, DOCLING_MAX_FILE_SIZE_MB) * 1024 * 1024
 _DOCLING_PDF_PAGE_BATCH_SIZE = max(1, DOCLING_PDF_PAGE_BATCH_SIZE)
 _DOCLING_THREADS = max(1, DOCLING_THREADS)
 _DOCLING_WORKER_PATH = Path(__file__).resolve().parent / "docling_worker.py"
 _DOCUMENT_TITLE_MAX_CHARS = 256
+DOCUMENT_INDEX_SCHEMA_VERSION = 2
 logger = logging.getLogger(__name__)
 _HF_CACHE_DIR = DOCLING_CACHE_DIR / "huggingface"
 _BUNDLED_HF_CACHE_DIR = DOCLING_BUNDLED_CACHE_DIR / "huggingface"
+
+
+def clear_storage_caches() -> None:
+    """Invalidate derived process-local state after a platform restore."""
+    _DOCUMENT_META_COUNT_CACHE.clear()
+    _DOCUMENT_TAXONOMIES_HYDRATED.clear()
+    with _KB_MAINTENANCE_STATUS_LOCK:
+        _KB_MAINTENANCE_STATUS.clear()
 
 
 def _prepare_docling_cache() -> None:
@@ -103,6 +116,34 @@ def _sanitize(value: str) -> str:
 
 def _now() -> str:
     return datetime.utcnow().isoformat() + "Z"
+
+
+def _set_kb_maintenance_status(company_id: int, **updates: Any) -> None:
+    with _KB_MAINTENANCE_STATUS_LOCK:
+        current = dict(_KB_MAINTENANCE_STATUS.get(company_id, {}))
+        current.update(updates)
+        current["company_id"] = company_id
+        current["updated_at"] = _now()
+        _KB_MAINTENANCE_STATUS[company_id] = current
+
+
+def get_kb_maintenance_status(company_id: int) -> Dict[str, Any]:
+    with _KB_MAINTENANCE_STATUS_LOCK:
+        current = dict(_KB_MAINTENANCE_STATUS.get(company_id, {}))
+    index_items = _read_documents_index(company_id)
+    meta_count = _count_document_meta_files_cached(company_id) if _company_root(company_id).exists() else 0
+    indexed_count = len(index_items)
+    current.setdefault("company_id", company_id)
+    current.setdefault("running", False)
+    current.setdefault("phase", "idle")
+    current.setdefault("processed", indexed_count)
+    current.setdefault("total", meta_count)
+    current.setdefault("indexed", indexed_count)
+    current.setdefault("errors", 0)
+    current["meta_count"] = meta_count
+    current["indexed_count"] = indexed_count
+    current["index_ready"] = bool(index_items) and indexed_count >= meta_count
+    return current
 
 
 DEFAULT_AREA = "sem-area"
@@ -227,6 +268,8 @@ def _count_document_meta_files_cached(company_id: int) -> int:
         cached_at, cached_count = cached
         if now - cached_at < _DOCUMENT_META_COUNT_TTL_SECONDS:
             return cached_count
+    if not _company_has_legacy_document_dirs(company_id):
+        return _count_new_storage_meta_files(company_id)
     total = len(list(_iter_document_meta_files(company_id)))
     _DOCUMENT_META_COUNT_CACHE[company_id] = (now, total)
     return total
@@ -263,6 +306,33 @@ def _documents_index_is_current_for_new_storage(company_id: int) -> bool:
     if not all(isinstance(item, dict) and "searchable_text" in item for item in items):
         return False
     return len(items) >= _count_new_storage_meta_files(company_id)
+
+
+def _ensure_taxonomies_from_index(company_id: int, items: list[Dict[str, Any]]) -> None:
+    if company_id in _DOCUMENT_TAXONOMIES_HYDRATED:
+        return
+    started_at = time.perf_counter()
+    areas_by_key: dict[str, str] = {}
+    categories_by_key: dict[tuple[str, str], tuple[str, str]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        area = str(item.get("area") or DEFAULT_AREA).strip() or DEFAULT_AREA
+        categoria = str(item.get("categoria") or DEFAULT_CATEGORIA).strip() or DEFAULT_CATEGORIA
+        area_key = _sanitize(area)
+        categoria_key = _sanitize(categoria)
+        areas_by_key.setdefault(area_key, area)
+        category_key = (area_key, categoria_key)
+        categories_by_key.setdefault(category_key, (area, categoria))
+    db.create_taxonomies_bulk(company_id, list(areas_by_key.values()), list(categories_by_key.values()))
+    _DOCUMENT_TAXONOMIES_HYDRATED.add(company_id)
+    logger.info(
+        "Empresa %s: taxonomias hidratadas a partir do indice em %.2fs. areas=%s categorias=%s",
+        company_id,
+        time.perf_counter() - started_at,
+        len(areas_by_key),
+        len(categories_by_key),
+    )
 
 
 def _find_meta_file_by_document_uuid(company_id: int, document_uuid: str) -> Optional[Path]:
@@ -501,7 +571,7 @@ def _meta_to_index_entry(meta: Dict[str, Any]) -> Dict[str, Any]:
         "satellite_version_id": version_uuid,
         "created_at": meta.get("created_at"),
         "updated_at": meta.get("updated_at"),
-        "searchable_text": _searchable_text_from_meta(meta),
+        "searchable_text": _metadata_search_blob(meta),
     }
 
 
@@ -615,6 +685,7 @@ def _write_documents_index_unlocked(company_id: int, items: list[Dict[str, Any]]
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "company_id": company_id,
+        "schema_version": DOCUMENT_INDEX_SCHEMA_VERSION,
         "updated_at": _now(),
         "items": items,
     }
@@ -631,15 +702,54 @@ def _write_documents_index(company_id: int, items: list[Dict[str, Any]]) -> None
         _write_documents_index_unlocked(company_id, items)
 
 
+def _read_documents_index_payload(company_id: int) -> Dict[str, Any]:
+    path = _documents_index_path(company_id)
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        logger.exception("Empresa %s: falha ao ler indice de documentos em %s.", company_id, path)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _sync_document_search_entry(company_id: int, meta: Dict[str, Any]) -> None:
+    document_uuid = str(meta.get("document_uuid") or "").strip()
+    if not document_uuid:
+        return
+    db.upsert_document_search(
+        company_id=company_id,
+        document_uuid=document_uuid,
+        title=str(meta.get("title") or ""),
+        slug=str(meta.get("slug") or ""),
+        area=str(meta.get("area") or ""),
+        categoria=str(meta.get("categoria") or ""),
+        tags=" ".join(_safe_tags(meta.get("tags", []))),
+        body=_document_body_for_search(meta),
+    )
+
+
 def _rebuild_documents_index(company_id: int) -> list[Dict[str, Any]]:
     with _document_index_lock(company_id):
         started_at = time.perf_counter()
         items: list[Dict[str, Any]] = []
+        search_rows: list[Dict[str, Any]] = []
         errors = 0
         meta_files = list(_iter_document_meta_files(company_id))
         total = len(meta_files)
         _DOCUMENT_META_COUNT_CACHE[company_id] = (time.perf_counter(), total)
         logger.info("Empresa %s: rebuild do indice iniciado. metas=%s", company_id, total)
+        _set_kb_maintenance_status(
+            company_id,
+            running=True,
+            phase="rebuilding_index",
+            processed=0,
+            total=total,
+            indexed=0,
+            errors=0,
+        )
         rebuilding = getattr(_DOCUMENT_INDEX_REBUILDING, "companies", None)
         if rebuilding is None:
             rebuilding = set()
@@ -660,7 +770,27 @@ def _rebuild_documents_index(company_id: int) -> list[Dict[str, Any]]:
                     )
                     continue
                 items.append(_meta_to_index_entry(meta))
+                search_rows.append(
+                    {
+                        "document_uuid": meta.get("document_uuid"),
+                        "title": meta.get("title") or "",
+                        "slug": meta.get("slug") or "",
+                        "area": meta.get("area") or "",
+                        "categoria": meta.get("categoria") or "",
+                        "tags": " ".join(_safe_tags(meta.get("tags", []))),
+                        "body": _document_body_for_search(meta),
+                    }
+                )
                 if index % 100 == 0:
+                    _set_kb_maintenance_status(
+                        company_id,
+                        running=True,
+                        phase="rebuilding_index",
+                        processed=index,
+                        total=total,
+                        indexed=len(items),
+                        errors=errors,
+                    )
                     logger.info(
                         "Empresa %s: rebuild do indice em progresso. processados=%s/%s indexados=%s erros=%s",
                         company_id,
@@ -672,6 +802,21 @@ def _rebuild_documents_index(company_id: int) -> list[Dict[str, Any]]:
         finally:
             rebuilding.discard(company_id)
         _write_documents_index_unlocked(company_id, items)
+        try:
+            db.replace_company_document_search(company_id, search_rows)
+        except Exception:
+            errors += 1
+            logger.exception("Empresa %s: falha ao reconstruir indice FTS.", company_id)
+        _ensure_taxonomies_from_index(company_id, items)
+        _set_kb_maintenance_status(
+            company_id,
+            running=False,
+            phase="ready",
+            processed=total,
+            total=total,
+            indexed=len(items),
+            errors=errors,
+        )
         logger.info(
             "Empresa %s: rebuild do indice concluido em %.2fs. indexados=%s erros=%s",
             company_id,
@@ -684,16 +829,33 @@ def _rebuild_documents_index(company_id: int) -> list[Dict[str, Any]]:
 
 def _ensure_documents_index(company_id: int) -> list[Dict[str, Any]]:
     with _document_index_lock(company_id):
-        items = _read_documents_index(company_id)
-        if items and all(isinstance(item, dict) and "searchable_text" in item for item in items):
+        payload = _read_documents_index_payload(company_id)
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        schema_version = int(payload.get("schema_version") or 0)
+        schema_ok = schema_version == DOCUMENT_INDEX_SCHEMA_VERSION
+        if items and schema_ok and all(isinstance(item, dict) and "document_uuid" in item for item in items):
             meta_count = _count_document_meta_files_cached(company_id)
             if len(items) >= meta_count:
+                if db.count_company_document_search(company_id) < len(items):
+                    logger.warning(
+                        "Empresa %s: indice FTS atrasado em relacao ao JSON. Rebuild iniciado.",
+                        company_id,
+                    )
+                    return _rebuild_documents_index(company_id)
+                _ensure_taxonomies_from_index(company_id, items)
                 return items
             logger.warning(
                 "Empresa %s: indice de documentos inconsistente. indexados=%s metas=%s. Rebuild iniciado.",
                 company_id,
                 len(items),
                 meta_count,
+            )
+        elif items and not schema_ok:
+            logger.info(
+                "Empresa %s: indice JSON em schema %s; migrando para schema %s.",
+                company_id,
+                schema_version,
+                DOCUMENT_INDEX_SCHEMA_VERSION,
             )
         return _rebuild_documents_index(company_id)
 
@@ -703,8 +865,10 @@ def _upsert_documents_index_entry(company_id: int, meta: Dict[str, Any]) -> None
         document_uuid = str(meta.get("document_uuid") or "").strip()
         if not document_uuid:
             return
-        items = _read_documents_index(company_id)
-        if not items:
+        payload = _read_documents_index_payload(company_id)
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        schema_ok = int(payload.get("schema_version") or 0) == DOCUMENT_INDEX_SCHEMA_VERSION
+        if not items or not schema_ok:
             _rebuild_documents_index(company_id)
             items = _read_documents_index(company_id)
         elif len(items) < _count_document_meta_files_cached(company_id):
@@ -725,6 +889,7 @@ def _upsert_documents_index_entry(company_id: int, meta: Dict[str, Any]) -> None
         if not replaced:
             items.append(entry)
         _write_documents_index_unlocked(company_id, items)
+        _sync_document_search_entry(company_id, meta)
 
 
 def _remove_documents_index_entry(company_id: int, document_uuid: Optional[str]) -> None:
@@ -734,6 +899,7 @@ def _remove_documents_index_entry(company_id: int, document_uuid: Optional[str])
             return
         items = _read_documents_index(company_id)
         if not items:
+            db.remove_document_search(company_id, document_uuid_value)
             return
         filtered = [
             item
@@ -742,6 +908,7 @@ def _remove_documents_index_entry(company_id: int, document_uuid: Optional[str])
         ]
         if len(filtered) != len(items):
             _write_documents_index_unlocked(company_id, filtered)
+        db.remove_document_search(company_id, document_uuid_value)
 
 
 def _docling_worker_env() -> dict[str, str]:
@@ -935,12 +1102,13 @@ def _read_text_with_retry(
     encoding: str = "utf-8",
     errors: str = "strict",
 ) -> Optional[str]:
-    for _ in range(_IO_MAX_RETRIES):
+    retryable = {errno.EDEADLK, errno.EWOULDBLOCK, errno.EIO, errno.EBUSY}
+    for attempt in range(_IO_MAX_RETRIES):
         try:
             return path.read_text(encoding=encoding, errors=errors)
         except OSError as exc:
-            if exc.errno in {errno.EDEADLK, errno.EWOULDBLOCK}:
-                time.sleep(_IO_RETRY_DELAY_SECONDS)
+            if exc.errno in retryable and attempt + 1 < _IO_MAX_RETRIES:
+                time.sleep(_IO_RETRY_DELAY_SECONDS * (attempt + 1))
                 continue
             raise
     return None
@@ -960,7 +1128,7 @@ def _strip_frontmatter(markdown: str) -> str:
     return "\n".join(lines[closing + 1 :]).lstrip("\n")
 
 
-def _searchable_text_from_meta(meta: Dict[str, Any]) -> str:
+def _metadata_search_blob(meta: Dict[str, Any]) -> str:
     parts = [
         str(meta.get("title") or ""),
         str(meta.get("slug") or ""),
@@ -968,29 +1136,60 @@ def _searchable_text_from_meta(meta: Dict[str, Any]) -> str:
         str(meta.get("categoria") or ""),
         " ".join(_safe_tags(meta.get("tags", []))),
     ]
-    selected_version = str(meta.get("published_version") or "").strip()
-    if not selected_version:
-        versions = [
-            entry
-            for entry in meta.get("versions", [])
-            if isinstance(entry, dict) and entry.get("version") is not None
-        ]
-        if versions:
-            versions = sorted(versions, key=lambda item: _version_key(item["version"]))
-            selected_version = str(versions[-1]["version"])
-    if selected_version:
-        version_path = _version_path(
-            int(meta.get("empresa_id")),
-            str(meta.get("area") or ""),
-            str(meta.get("categoria") or ""),
-            str(meta.get("slug") or ""),
-            selected_version,
-            document_uuid=str(meta.get("document_uuid") or ""),
-        )
-        content = _read_text_with_retry(version_path, encoding="utf-8", errors="ignore") if version_path.exists() else ""
-        if content:
-            parts.append(_strip_frontmatter(content))
     return " ".join(part for part in parts if part).lower()
+
+
+def _selected_version_for_search(meta: Dict[str, Any]) -> str:
+    selected_version = str(meta.get("published_version") or "").strip()
+    if selected_version:
+        return selected_version
+    versions = [
+        entry
+        for entry in meta.get("versions", [])
+        if isinstance(entry, dict) and entry.get("version") is not None
+    ]
+    if not versions:
+        return ""
+    versions = sorted(versions, key=lambda item: _version_key(item["version"]))
+    return str(versions[-1]["version"])
+
+
+def _document_body_for_search(meta: Dict[str, Any]) -> str:
+    selected_version = _selected_version_for_search(meta)
+    if not selected_version:
+        return ""
+    try:
+        company_id = int(meta.get("empresa_id"))
+    except (TypeError, ValueError):
+        return ""
+    version_path = _version_path(
+        company_id,
+        str(meta.get("area") or ""),
+        str(meta.get("categoria") or ""),
+        str(meta.get("slug") or ""),
+        selected_version,
+        document_uuid=str(meta.get("document_uuid") or ""),
+    )
+    if not version_path.exists():
+        return ""
+    try:
+        content = _read_text_with_retry(version_path, encoding="utf-8", errors="ignore") or ""
+    except OSError:
+        logger.warning(
+            "Falha ao ler corpo para FTS: empresa=%s document_uuid=%s path=%s",
+            company_id,
+            meta.get("document_uuid"),
+            version_path,
+        )
+        return ""
+    return _strip_frontmatter(content).lower()
+
+
+def _searchable_text_from_meta(meta: Dict[str, Any]) -> str:
+    """Compat: metadados + corpo da versao selecionada (uso interno/legado)."""
+    body = _document_body_for_search(meta)
+    blob = _metadata_search_blob(meta)
+    return f"{blob} {body}".strip()
 
 
 def rebuild_documents_from_markdown_files(force: bool = False) -> Dict[str, int]:
@@ -1219,6 +1418,17 @@ def migrate_documents_storage_layout(company_id: Optional[int] = None) -> int:
         company_t0 = time.perf_counter()
         with _document_index_lock(current_company_id):
             if _documents_index_is_current_for_new_storage(current_company_id):
+                current_items = _read_documents_index(current_company_id)
+                _ensure_taxonomies_from_index(current_company_id, current_items)
+                _set_kb_maintenance_status(
+                    current_company_id,
+                    running=False,
+                    phase="ready",
+                    processed=len(current_items),
+                    total=len(current_items),
+                    indexed=len(current_items),
+                    errors=0,
+                )
                 _MIGRATED_COMPANIES.add(current_company_id)
                 logger.info(
                     "Empresa %s: migração ignorada; layout novo e indice atual em %.2fs.",
@@ -1228,12 +1438,31 @@ def migrate_documents_storage_layout(company_id: Optional[int] = None) -> int:
                 continue
         meta_files = list(_iter_document_meta_files(current_company_id))
         logger.info("Empresa %s: migração iniciada. metas=%s", current_company_id, len(meta_files))
+        existing_indexed_count = len(_read_documents_index(current_company_id))
+        _set_kb_maintenance_status(
+            current_company_id,
+            running=True,
+            phase="migrating_documents",
+            processed=0,
+            total=len(meta_files),
+            indexed=existing_indexed_count,
+            errors=0,
+        )
         company_migrated = 0
         company_errors = 0
         for index, meta_file in enumerate(meta_files, start=1):
             if _is_new_storage_meta_path(current_company_id, meta_file):
                 _read_meta_by_path(current_company_id, meta_file, migrate=False)
                 if index % 100 == 0:
+                    _set_kb_maintenance_status(
+                        current_company_id,
+                        running=True,
+                        phase="migrating_documents",
+                        processed=index,
+                        total=len(meta_files),
+                        indexed=existing_indexed_count,
+                        errors=company_errors,
+                    )
                     logger.info(
                         "Empresa %s: validação de metas novas em progresso. processados=%s/%s",
                         current_company_id,
@@ -1937,14 +2166,13 @@ def read_published_documents(
     return_total: bool = False,
     allowed_areas: Optional[set[str]] = None,
 ) -> Dict[str, Any] | list[Dict[str, Any]]:
-    migrate_documents_storage_layout(company_id)
     root = _company_root(company_id)
     if not root.exists():
         if return_total:
-            return {"total": 0, "items": []}
+            return {"total": 0, "pending_total": 0, "items": []}
         return []
-    term = (busca or "").strip().lower() if busca else ""
-    should_load_content = include_content or bool(term)
+    term = (busca or "").strip()
+    term_lower = term.lower()
     area_filter = _sanitize(area) if area else None
     categoria_filter = _sanitize(categoria) if categoria else None
     tag_filter = _normalize_tag_filter(tag)
@@ -1952,10 +2180,32 @@ def read_published_documents(
     data_validade_ate_filter = (data_validade_ate or "").strip()
     index_items = _ensure_documents_index(company_id)
     allowed_areas_filter = {_sanitize(area or DEFAULT_AREA) for area in allowed_areas} if allowed_areas is not None else None
+
+    fts_rank: Dict[str, int] = {}
+    candidate_items = index_items
+    if term_lower:
+        fts_hits = db.search_document_uuids(company_id, term)
+        if fts_hits:
+            fts_rank = {document_uuid: index for index, document_uuid in enumerate(fts_hits)}
+            by_uuid = {
+                str(item.get("document_uuid") or "").strip(): item
+                for item in index_items
+                if str(item.get("document_uuid") or "").strip()
+            }
+            candidate_items = [by_uuid[document_uuid] for document_uuid in fts_hits if document_uuid in by_uuid]
+        elif db.count_company_document_search(company_id) > 0:
+            candidate_items = []
+        else:
+            # Fallback quando FTS ainda nao foi populado.
+            candidate_items = [
+                item
+                for item in index_items
+                if term_lower in str(item.get("searchable_text", "")).lower()
+            ]
+
     out: list[Dict[str, Any]] = []
-    for item in index_items:
+    for item in candidate_items:
         published_version = str(item.get("published_version", "") or "")
-        selected_version = str(item.get("version", "") or "")
         if not published_version and not include_unpublished:
             continue
         item_area = _sanitize(item.get("area") or DEFAULT_AREA)
@@ -1963,7 +2213,7 @@ def read_published_documents(
             continue
         if area_filter and item_area != area_filter:
             continue
-        if categoria_filter and item.get("categoria") != categoria_filter:
+        if categoria_filter and _sanitize(item.get("categoria") or DEFAULT_CATEGORIA) != categoria_filter:
             continue
         if tag_filter and tag_filter not in [_normalize_tag_filter(entry) for entry in (item.get("tags") or [])]:
             continue
@@ -1973,29 +2223,7 @@ def read_published_documents(
         if item_data_validade and data_validade_ate_filter and item_data_validade > data_validade_ate_filter:
             continue
 
-        metadata_matches = True
-        if term:
-            metadata_matches = term in str(item.get("searchable_text", "")).lower()
-
-        published_content = ""
-        if term and not metadata_matches:
-            continue
-        elif include_content:
-            try:
-                published_content = read_published_document_content(
-                    company_id=company_id,
-                    area=item.get("area", ""),
-                    categoria=item.get("categoria", ""),
-                    slug=item.get("slug", ""),
-                    version=selected_version,
-                ).get("content", "")
-            except (FileNotFoundError, ValueError, OSError):
-                published_content = ""
-
-        payload_item = dict(item)
-        if include_content:
-            payload_item["content"] = published_content
-        out.append(payload_item)
+        out.append(dict(item))
 
     def _validade_key(value: Any, missing_as_max: bool) -> datetime:
         raw = str(value or "").strip()
@@ -2008,24 +2236,89 @@ def read_published_documents(
 
     sort_option = (sort_by or "").strip()
     if sort_option == "created_asc":
-        out = sorted(out, key=lambda item: item["updated_at"] or "")
+        out = sorted(out, key=lambda item: item.get("created_at") or item.get("updated_at") or "")
     elif sort_option == "validade_asc":
         out = sorted(out, key=lambda item: _validade_key(item.get("data_validade"), True))
     elif sort_option == "validade_desc":
         out = sorted(out, key=lambda item: _validade_key(item.get("data_validade"), False), reverse=True)
     elif sort_option == "area_asc":
-        out = sorted(out, key=lambda item: (item["area"] or "", item["categoria"] or "", item["updated_at"] or ""), reverse=False)
+        out = sorted(out, key=lambda item: (item.get("area") or "", item.get("categoria") or "", item.get("updated_at") or ""))
     elif sort_option == "categoria_asc":
-        out = sorted(out, key=lambda item: (item["categoria"] or "", item["area"] or "", item["updated_at"] or ""), reverse=False)
+        out = sorted(out, key=lambda item: (item.get("categoria") or "", item.get("area") or "", item.get("updated_at") or ""))
+    elif sort_option == "relevance" and fts_rank:
+        out = sorted(
+            out,
+            key=lambda item: fts_rank.get(str(item.get("document_uuid") or ""), len(fts_rank)),
+        )
     else:
-        out = sorted(out, key=lambda item: item["updated_at"] or "", reverse=True)
+        out = sorted(out, key=lambda item: item.get("updated_at") or "", reverse=True)
 
     total = len(out)
     pending_total = sum(1 for item in out if bool(item.get("pending_approval")))
     documents = out[offset : offset + limit]
+
+    if include_content:
+        _hydrate_documents_content(company_id, documents)
+
     if return_total:
         return {"total": total, "pending_total": pending_total, "items": documents}
     return documents
+
+
+def _read_listed_document_body(
+    company_id: int,
+    document_uuid: str,
+    area: str,
+    categoria: str,
+    slug: str,
+    version: str,
+) -> str:
+    """Le o corpo Markdown da versao sem reler document.meta.json."""
+    selected_version = str(version or "").strip()
+    document_uuid_value = str(document_uuid or "").strip()
+    if not selected_version or not document_uuid_value:
+        return ""
+    version_path = _version_path(
+        company_id,
+        str(area or ""),
+        str(categoria or ""),
+        str(slug or ""),
+        selected_version,
+        document_uuid=document_uuid_value,
+    )
+    if not version_path.exists():
+        return ""
+    try:
+        content = _read_text_with_retry(version_path, encoding="utf-8", errors="ignore") or ""
+    except OSError:
+        return ""
+    return _strip_frontmatter(content)
+
+
+def _hydrate_documents_content(company_id: int, documents: list[Dict[str, Any]]) -> None:
+    if not documents:
+        return
+
+    def _load(item: Dict[str, Any]) -> str:
+        return _read_listed_document_body(
+            company_id=company_id,
+            document_uuid=str(item.get("document_uuid") or ""),
+            area=str(item.get("area") or ""),
+            categoria=str(item.get("categoria") or ""),
+            slug=str(item.get("slug") or ""),
+            version=str(item.get("version") or ""),
+        )
+
+    workers = max(1, min(8, len(documents)))
+    if workers == 1:
+        for item in documents:
+            item["content"] = _load(item)
+        return
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        bodies = list(pool.map(_load, documents))
+    for item, body in zip(documents, bodies):
+        item["content"] = body
 
 
 def read_published_document_content(

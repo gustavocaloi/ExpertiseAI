@@ -8,3 +8,5 @@ data/
 doc/feat.md
 .env
 .DS_Store
+AGENTS.md
+SKILL.md

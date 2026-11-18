@@ -18,6 +18,7 @@ from .config import (
     SUPER_ADMIN_USER,
 )
 from . import db
+from .maintenance import session_epoch
 
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
@@ -72,6 +73,7 @@ def create_access_token(
         "roles": normalized_roles,
         "email": email,
         "exp": expire,
+        "session_epoch": session_epoch(),
     }
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -94,6 +96,7 @@ def create_refresh_token(
         "roles": normalized_roles,
         "email": email,
         "token_type": "refresh",
+        "session_epoch": session_epoch(),
         "exp": expire,
     }
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -102,6 +105,8 @@ def create_refresh_token(
 def decode_access_token(token: str, expected_token_type: str = "access") -> TokenData:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("session_epoch", "") != session_epoch():
+            raise ValueError("session invalidated by platform restore")
         token_type = str(payload.get("token_type") or "access")
         if token_type != expected_token_type:
             raise ValueError("unexpected token type")
@@ -194,3 +199,65 @@ def require_company_access(company_id: int, user: TokenData = Depends(current_us
             detail="Token fora do contexto da empresa",
         )
     return _refresh_membership(user)
+
+
+def get_monitoria_scope(company_id: int, user: TokenData):
+    from . import monitoria_db as mdb
+
+    if not ACCESS_CONTROL_ENABLED:
+        return mdb.resolve_monitoria_scope(
+            user.user_id,
+            company_id,
+            kb_roles=["admin"],
+            access_control_enabled=False,
+        )
+    refreshed = _refresh_membership(user) if user.company_id == company_id else user
+    return mdb.resolve_monitoria_scope(
+        refreshed.user_id,
+        company_id,
+        kb_roles=list(refreshed.roles or [refreshed.role]),
+        access_control_enabled=True,
+    )
+
+
+def require_monitoria_role(*roles: str):
+    async def _checker(
+        company_id: int,
+        user: TokenData = Depends(current_user),
+    ):
+        from . import monitoria_db as mdb
+
+        if not ACCESS_CONTROL_ENABLED:
+            return user, get_monitoria_scope(company_id, user)
+        if user.company_id != company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Token fora do contexto da empresa",
+            )
+        user = _refresh_membership(user)
+        assert_module_access(company_id, user, "monitoria")
+        scope = get_monitoria_scope(company_id, user)
+        if not scope.roles and not scope.is_full_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Usuário sem acesso ao módulo de monitoria",
+            )
+        if roles and not mdb.user_has_monitoria_role(scope, *roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Perfil de monitoria insuficiente. Permitido: {', '.join(roles)}",
+            )
+        return user, scope
+
+    return _checker
+
+
+def assert_module_access(company_id: int, user: TokenData, module: str) -> None:
+    if ACCESS_CONTROL_ENABLED and module not in db.get_user_modules(user.user_id, company_id)["modules"]:
+        raise HTTPException(status_code=403, detail="Usuário sem acesso ao módulo " + module)
+
+
+def require_content_module(company_id: int, user: TokenData = Depends(current_user)):
+    user = require_company_access(company_id, user)
+    assert_module_access(company_id, user, "conteudo")
+    return user
