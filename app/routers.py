@@ -31,6 +31,7 @@ from .security import (
     optional_current_user,
     require_company_access,
     require_role,
+    assert_module_access,
     verify_password,
 )
 
@@ -59,6 +60,9 @@ class LoginResponse(BaseModel):
 
 
 class UserSessionResponse(BaseModel):
+    can_manage_backup: bool = False
+    modules: list[str] = ["conteudo", "monitoria"]
+    monitoria_role: str = "monitoria_analista"
     user_id: int
     full_name: str
     email: str
@@ -90,9 +94,13 @@ class CreateUserPayload(BaseModel):
     password: Optional[str] = None
     role: str
     profile_ids: list[int] = []
+    modules: Optional[list[str]] = None
+    monitoria_role: str = "monitoria_analista"
 
 
 class UpdateUserAccessPayload(BaseModel):
+    modules: Optional[list[str]] = None
+    monitoria_role: Optional[str] = None
     roles: list[str] = []
     full_name: Optional[str] = None
     password: Optional[str] = None
@@ -191,7 +199,9 @@ def get_current_user(user: TokenData = Depends(current_user)):
         "role": role,
         "roles": roles,
         "require_password_change": bool(row["require_password_change"]),
+        "can_manage_backup": "admin" in roles and db.is_platform_admin(user.user_id),
         "company_id": user.company_id,
+        **db.get_user_modules(user.user_id, user.company_id),
         "company_name": company["name"],
         "company_description": company["description"],
     }
@@ -436,6 +446,7 @@ def create_user(
     user: TokenData = Depends(require_role("admin")),
 ):
     _is_scoped_access_allowed(company_id, user)
+    _validate_modules(payload.modules, payload.monitoria_role)
     normalized_role = db.normalize_access_role(payload.role)
     if normalized_role not in {"admin", "editor", "aprovador"}:
         raise HTTPException(status_code=422, detail="role inválido")
@@ -454,6 +465,8 @@ def create_user(
         )
 
     db.assign_role_to_user(user_id, company_id, normalized_role)
+    if payload.modules is not None:
+        db.set_user_modules(user_id, company_id, payload.modules, payload.monitoria_role)
     assigned_profile_ids = db.set_user_assigned_area_profiles(user_id, company_id, payload.profile_ids)
     db.record_access_audit_event(
         company_id=company_id,
@@ -468,6 +481,7 @@ def create_user(
         ),
     )
     return {
+        **db.get_user_modules(user_id, company_id),
         "message": "usuário criado/vinculado com sucesso",
         "usuario_id": user_id,
         "empresa_id": company_id,
@@ -488,6 +502,8 @@ def update_user_access(
     if not target:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
+    _validate_modules(payload.modules, payload.monitoria_role)
+    previous_modules = db.get_user_modules(target_user_id, company_id)
     next_full_name = None
     if payload.full_name is not None:
         cleaned_name = payload.full_name.strip()
@@ -514,7 +530,13 @@ def update_user_access(
         require_password_change=_must_force_password_change(target["email"]) if payload.password else None,
     )
     roles = db.set_user_roles_in_company(target_user_id, company_id, normalized_roles)
+    if payload.modules is not None or payload.monitoria_role is not None:
+        db.set_user_modules(target_user_id, company_id,
+            payload.modules if payload.modules is not None else previous_modules['modules'],
+            payload.monitoria_role or previous_modules['monitoria_role'])
     note_parts: list[str] = []
+    if payload.modules is not None or payload.monitoria_role is not None:
+        note_parts.append("Módulos: " + ", ".join(db.get_user_modules(target_user_id, company_id)['modules']) + "; perfil Monitoria: " + db.get_user_modules(target_user_id, company_id)['monitoria_role'])
     if next_full_name is not None and next_full_name != target["full_name"]:
         note_parts.append("Nome atualizado")
     if payload.password:
@@ -528,6 +550,7 @@ def update_user_access(
         note=". ".join(note_parts) if note_parts else "Perfis atualizados.",
     )
     return {
+        **db.get_user_modules(target_user_id, company_id),
         "message": "acessos atualizados com sucesso",
         "usuario_id": target_user_id,
         "empresa_id": company_id,
@@ -607,6 +630,12 @@ def get_mcp_info():
             "get_document_metadata",
             "get_document_content",
             "list_taxonomies",
+            "monitoria_describe", "monitoria_search_conversations", "monitoria_get_conversation",
+            "monitoria_get_job", "monitoria_list_batches", "monitoria_get_batch",
+            "monitoria_list_pillars", "monitoria_create_pillar", "monitoria_update_pillar",
+            "monitoria_get_settings", "monitoria_update_settings", "monitoria_list_taxonomies",
+            "monitoria_classify_conversation", "monitoria_create_demo", "monitoria_submit_audio_batch",
+            "integration_prepare_monitoria_upload", "integration_list_api_operations", "integration_get_api_contract",
         ],
         "limits": {
             "max_page_size": MCP_MAX_PAGE_SIZE,
@@ -624,8 +653,15 @@ def get_mcp_info():
 
 @router.post("/admin/rebuild-documents", tags=["admin"])
 def rebuild_documents_metadata(force: bool = False, user: TokenData = Depends(require_role("admin"))):
-    _ = user
+    assert_module_access(user.company_id, user, "conteudo")
     return {
         "status": "ok",
         "result": services.rebuild_documents_from_markdown_files(force=force),
     }
+
+
+def _validate_modules(modules, monitoria_role):
+    if modules is not None and not set(modules) <= db.MODULES:
+        raise HTTPException(status_code=422, detail="Módulos permitidos: conteudo, monitoria")
+    if monitoria_role is not None and monitoria_role not in db.MONITORIA_ACCESS_ROLES:
+        raise HTTPException(status_code=422, detail="Perfil de Monitoria inválido")

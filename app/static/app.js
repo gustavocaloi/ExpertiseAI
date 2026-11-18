@@ -51,6 +51,7 @@ const taxonomyMsg = document.getElementById('taxonomyMsg');
 const sessionButtons = Array.from(document.querySelectorAll('.menu-item[data-session]'));
 const toastContainer = document.getElementById('toastContainer');
 const docsList = document.getElementById('docsList');
+const kbStatusAlert = document.getElementById('kbStatusAlert');
 const refreshDocsButton = document.getElementById('refreshDocs');
 const createSession = document.getElementById('createSession');
 const docModal = document.getElementById('docViewerModal');
@@ -188,6 +189,7 @@ const pagination = {
   total: 0,
 };
 let docsSearchDebounceTimer = null;
+let docsRequestId = 0;
 const ACCESS_ROLE_OPTIONS = ['admin', 'editor', 'aprovador'];
 let companyUsersCache = [];
 let companyUserAuditCache = [];
@@ -351,6 +353,17 @@ function normalizeDocumentError(errorValue) {
   return raw;
 }
 
+function hasModule(module, profile = state.profile) {
+  return !isAccessControlEnabled() || (profile?.modules || []).includes(module);
+}
+function selectedModules(prefix) { return [...document.querySelectorAll(`#${prefix}Modules input:checked`)].map(el => el.value); }
+function updateModuleNavigation() {
+  const contentSessions = ['dashboardSession', 'createSession', 'taxonomySession', 'uploadQueueSession'];
+  sessionButtons.forEach(button => {
+    const id = button.dataset.session;
+    if (id === 'monitoriaSession' || contentSessions.includes(id)) button.classList.toggle('hidden-view', !hasModule(id === 'monitoriaSession' ? 'monitoria' : 'conteudo'));
+  });
+}
 function canDeleteDocumentCard() {
   return !isAccessControlEnabled() || isAdminProfile() || hasRole('editor');
 }
@@ -396,9 +409,42 @@ function updateDashboardApprovalStatus() {
         ? `${pendingTotal} pendente(s) de aprovação`
         : 'Nenhuma pendência de aprovação',
     );
+    statusChip.dataset.tone = pendingTotal > 0 ? 'warning' : 'neutral';
     return;
   }
   setStatus('Sem pendências de aprovação');
+}
+
+function formatKbStatusMessage(status = {}) {
+  const phase = String(status?.phase || '').trim();
+  const running = Boolean(status?.running);
+  const indexed = Number(status?.indexed ?? status?.indexed_count ?? 0);
+  const total = Number(status?.total ?? status?.meta_count ?? 0);
+  const processed = Number(status?.processed ?? 0);
+  const errors = Number(status?.errors ?? 0);
+  const suffix = total > 0
+    ? ` (${Math.min(processed || indexed, total)}/${total} verificados, ${indexed} indexados${errors ? `, ${errors} erro(s)` : ''})`
+    : '';
+
+  if (running && phase === 'rebuilding_index') {
+    return `A base de conhecimento está reconstruindo o índice. Os documentos podem aparecer aos poucos${suffix}.`;
+  }
+  if (running && phase === 'migrating_documents') {
+    return `A base de conhecimento está validando documentos no startup. A listagem pode ficar incompleta por alguns minutos${suffix}.`;
+  }
+  if (!status?.index_ready && total > 0) {
+    return `A base possui ${total} documento(s), mas o índice ainda está preparando a listagem (${indexed} indexados).`;
+  }
+  return '';
+}
+
+function updateKbStatusAlert(status = {}) {
+  if (!kbStatusAlert) {
+    return;
+  }
+  const message = formatKbStatusMessage(status);
+  kbStatusAlert.textContent = message;
+  kbStatusAlert.classList.toggle('hidden-view', !message);
 }
 
 function formatRoleLabel(profile = state.profile) {
@@ -723,9 +769,21 @@ function renderTaxonomyList(listElement, items = [], kind) {
       li.classList.add('taxonomy-item--active');
     }
     li.innerHTML = `
-      <span class="taxonomy-name">${name}${area ? ` <span class="taxonomy-area-pill">${area}</span>` : ''}</span>
-      <button type="button" class="taxonomy-remove" data-kind="${kind}" data-name="${name}" ${area ? `data-area="${area}"` : ''}>Remover</button>
+      <span class="taxonomy-name">${escapeHtml(name)}${area ? ` <span class="taxonomy-area-pill">${escapeHtml(area)}</span>` : ''}</span>
+      <button type="button" class="taxonomy-remove" data-kind="${kind}" data-name="${escapeHtml(name)}" ${area ? `data-area="${escapeHtml(area)}"` : ''}>Remover</button>
     `;
+    if (kind === 'areas') {
+      const nameControl = li.querySelector('.taxonomy-name');
+      nameControl.tabIndex = 0;
+      nameControl.setAttribute('role', 'button');
+      nameControl.setAttribute('aria-label', `Mostrar categorias de ${name}`);
+      nameControl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          nameControl.click();
+        }
+      });
+    }
     listElement.appendChild(li);
   });
 }
@@ -917,10 +975,10 @@ function renderUsersList(users = []) {
     li.dataset.userId = String(item.id || '');
     const effectiveRole = item.role || formatRoleLabel(item) || '-';
     li.innerHTML = `
-      <div class="user-access-list-item__summary">
-        <strong>${item.full_name || item.nome || '-'}</strong>
-        <small>${effectiveRole}</small>
-      </div>
+      <button type="button" class="user-access-list-item__summary" aria-label="Gerenciar acesso de ${escapeHtml(item.full_name || item.nome || item.email || 'usuário')}">
+        <strong>${escapeHtml(item.full_name || item.nome || '-')}</strong>
+        <small>${escapeHtml(effectiveRole)} · ${escapeHtml((item.modules || []).map(module => ({conteudo: "Gestão de Conteúdo", monitoria: "Monitoria"}[module] || module)).join(", ") || "Sem módulos")}</small>
+      </button>
     `;
     usersList.appendChild(li);
   });
@@ -1034,6 +1092,8 @@ async function openUserAccessModal(userId) {
   if (userAccessModalPassword) {
     userAccessModalPassword.value = '';
   }
+  document.querySelectorAll('#userAccessModalModules input').forEach(el => { el.checked = (user.modules || []).includes(el.value); });
+  document.getElementById('userAccessModalMonitoriaRole').value = user.monitoria_role || 'monitoria_analista';
   if (userAccessModalRoles) {
     userAccessModalRoles.innerHTML = '';
     ACCESS_ROLE_OPTIONS.forEach((role) => {
@@ -1076,6 +1136,7 @@ async function openUserAccessModal(userId) {
       profiles: areaRestrictionProfilesCatalog,
     };
   }
+  if (selectedUserAccessRecord?.id !== user.id) return;
   renderUserAccessRestrictionDropdown();
   userAccessModal.setAttribute('aria-hidden', 'false');
   userAccessModal.classList.add('open');
@@ -1127,11 +1188,15 @@ async function saveSelectedUserAccess() {
     setUserAccessModalMessage('Informe um nome válido.', 'error');
     return;
   }
+  if (userAccessModalSave.disabled) return;
+  userAccessModalSave.disabled = true;
   try {
     await apiFetch(`/api/v1/empresas/${state.companyId}/usuarios/${user.id}/acessos`, {
       method: 'PUT',
       body: JSON.stringify({
         roles,
+        modules: selectedModules('userAccessModal'),
+        monitoria_role: document.getElementById('userAccessModalMonitoriaRole').value,
         full_name: fullName,
         password,
       }),
@@ -1149,10 +1214,13 @@ async function saveSelectedUserAccess() {
     await loadUsersForCompany();
     resetUserAuditPagination();
     await loadUserAccessAudit();
-    await openUserAccessModal(user.id);
+    if (selectedUserAccessRecord?.id === user.id && userAccessModal.classList.contains('open')) {
+      await openUserAccessModal(user.id);
+      setUserAccessModalMessage('Usuário atualizado com sucesso.', 'success');
+    }
   } catch (error) {
     setUserAccessModalMessage(error.message, 'error');
-  }
+  } finally { userAccessModalSave.disabled = false; }
 }
 
 async function revokeSelectedUserAccess() {
@@ -1567,6 +1635,10 @@ async function loadAreaRestrictionProfilesCatalog() {
 }
 
 function toggleAdminMenuVisibility() {
+  updateModuleNavigation();
+  const canBackup = isAccessControlEnabled() && state.profile?.can_manage_backup === true;
+  document.getElementById('backupMenuItem')?.classList.toggle('hidden-view', !canBackup);
+  if (!canBackup && sessions.backupSession?.classList.contains('active-session')) showSession('profileSession');
   if (!isAccessControlEnabled()) {
     if (userAdminMenuItem) {
       userAdminMenuItem.classList.add('hidden-view');
@@ -1760,6 +1832,7 @@ async function revokeUserAccessFromCard(card) {
 }
 
 async function loadTaxonomies() {
+  if (!hasModule('conteudo')) return;
   if (!state.companyId) {
     state.taxonomies.areas = [];
     state.taxonomies.categorias = [];
@@ -1858,10 +1931,12 @@ function compareVersions(a, b) {
 }
 
 const sessions = {
+  backupSession: document.getElementById('backupSession'),
   dashboardSession: document.getElementById('dashboardSession'),
   createSession: document.getElementById('createSession'),
   profileSession: document.getElementById('profileSession'),
   taxonomySession: document.getElementById('taxonomySession'),
+  monitoriaSession: document.getElementById('monitoriaSession'),
   userAdminSession: document.getElementById('userAdminSession'),
   userAreaAccessSession: document.getElementById('userAreaAccessSession'),
   publishSession: document.getElementById('publishSession'),
@@ -1886,6 +1961,15 @@ function showInlineCreateSession(show = true) {
 }
 
 function showSession(sessionId) {
+  if (sessionId === 'backupSession' && (!isAccessControlEnabled() || state.profile?.can_manage_backup !== true)) {
+    showToast('Backup restrito a administradores de todas as empresas.', 'error');
+    sessionId = 'profileSession';
+  }
+  if (state.profile) {
+    const content = ['dashboardSession', 'createSession', 'taxonomySession', 'uploadQueueSession'];
+    if ((sessionId === 'monitoriaSession' && !hasModule('monitoria')) || (content.includes(sessionId) && !hasModule('conteudo'))) sessionId = hasModule('monitoria') ? 'monitoriaSession' : 'profileSession';
+  }
+  if (sessionId !== 'monitoriaSession') { document.getElementById('monitoriaAudio')?.pause(); stopMonitoriaBatchPolling(); }
   if ((sessionId === 'userAdminSession' || sessionId === 'userAreaAccessSession') && !isAdminProfile()) {
     showToast('Somente administradores podem acessar a sessão de gestão de acessos.', 'error');
     sessionId = 'dashboardSession';
@@ -1899,12 +1983,18 @@ function showSession(sessionId) {
   sessionButtons.forEach((button) => {
     const selected = button.dataset.session === sessionId;
     button.classList.toggle('active', selected);
+    if (selected) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
+  if (sessionId === 'createSession') {
+    document.getElementById('documentFormTitle').textContent = editingDocumentContext || selectedDocument
+      ? 'Editar documento' : 'Novo documento';
+  }
 }
 
 function setStatus(text, ok = true) {
   statusChip.textContent = text;
-  statusChip.style.color = ok ? 'var(--ink-soft)' : '#8c342f';
+  statusChip.dataset.tone = ok ? 'neutral' : 'error';
 }
 
 function formatProfileLabel(profile) {
@@ -2017,14 +2107,17 @@ function hideImportProgress(message = null) {
 }
 
 function setPanel(authenticated) {
+  document.body.classList.toggle('is-authenticated', authenticated);
   debugMenuLog('setPanel', { authenticated, token: Boolean(state.token), companyId: state.companyId, hasProfile: Boolean(state.profile), accessControlEnabled: isAccessControlEnabled() });
   if (authenticated) {
     loginPanel.classList.add('hidden-view');
     loginPanel.classList.remove('active');
     dashboardPanel.classList.add('active');
-    workspaceNav.style.display = 'flex';
+    if (workspaceNav) {
+      workspaceNav.style.removeProperty('display');
+    }
     if (userMenu) {
-      userMenu.style.display = 'block';
+      userMenu.style.removeProperty('display');
     }
     debugMenuLog('setPanel.auth', {
       userMenuExists: Boolean(userMenu),
@@ -2034,6 +2127,7 @@ function setPanel(authenticated) {
     loadTaxonomies();
     toggleAdminMenuVisibility();
     showSession('dashboardSession');
+    if (!hasModule('conteudo') && hasModule('monitoria')) void loadMonitoriaSession();
     setPanelStatusText();
     hideUserMenu();
     loadPublishedDocs();
@@ -2041,9 +2135,11 @@ function setPanel(authenticated) {
     loginPanel.classList.remove('hidden-view');
     loginPanel.classList.add('active');
     dashboardPanel.classList.remove('active');
-    workspaceNav.style.display = 'none';
+    if (workspaceNav) {
+      workspaceNav.style.removeProperty('display');
+    }
     if (userMenu) {
-      userMenu.style.display = 'none';
+      userMenu.style.removeProperty('display');
       hideUserMenu();
     }
     hideEditHistory();
@@ -2054,7 +2150,7 @@ function setPanel(authenticated) {
     state.taxonomies = { areas: [], categorias: [] };
     renderTaxonomies();
     state.profile = null;
-    renderProfileToUi({ full_name: '-', email: '-', role: '-', company_name: '-' });
+    renderProfileToUi(null);
     toggleAdminMenuVisibility();
     if (usersList) {
       usersList.innerHTML = '<li>Sem permissão para visualizar usuários.</li>';
@@ -2191,6 +2287,8 @@ function persistAuthTokens(accessToken = '', refreshToken = '') {
 }
 
 function doLogout(reason = '', notify = false) {
+  resetMonitoriaBatchContext(true);
+  document.getElementById('monitoriaAudio')?.pause();
   state.token = '';
   state.refreshToken = '';
   localStorage.removeItem('expai_token');
@@ -3103,6 +3201,7 @@ docArea?.addEventListener('change', () => {
 });
 
 async function apiFetch(path, options = {}) {
+  const { responseType, ...requestOptions } = options;
   const headers = { ...(options.headers || {}) };
   if (state.token && !headers.Authorization) {
     headers.Authorization = `Bearer ${state.token}`;
@@ -3112,8 +3211,10 @@ async function apiFetch(path, options = {}) {
   }
 
   const request = async () => {
-    const response = await fetch(path, { ...options, headers: { ...headers } });
-    const data = await response.json().catch(() => ({}));
+    const response = await fetch(path, { ...requestOptions, headers: { ...headers } });
+    const data = response.ok && responseType === 'blob'
+      ? await response.blob()
+      : await response.json().catch(() => ({}));
     return { response, data };
   };
 
@@ -3292,31 +3393,11 @@ async function handleUserMenuButton(event) {
   });
   debugMenuLog('userMenuBtn.dropdownComputed', window.getComputedStyle(userMenuDropdown));
   toggleUserMenu();
-  window.requestAnimationFrame(() => {
-    const styles = window.getComputedStyle(userMenuDropdown);
-    const visible = styles.display !== 'none' && styles.visibility !== 'hidden' && userMenuDropdown.classList.contains('is-open');
-    if (!visible) {
-      debugMenuLog('userMenuBtn.fallbackOpen', {
-        display: styles.display,
-        visibility: styles.visibility,
-        className: userMenuDropdown.className,
-      });
-      userMenuDropdown.style.display = 'grid';
-      userMenuDropdown.style.visibility = 'visible';
-      userMenuDropdown.style.pointerEvents = 'auto';
-      userMenuDropdown.classList.add('is-open');
-      userMenuDropdown.setAttribute('aria-hidden', 'false');
-      userMenuBtn.setAttribute('aria-expanded', 'true');
-      if (userMenu) {
-        userMenu.classList.add('is-open');
-      }
-    }
-  });
+
 }
 
 if (userMenuBtn) {
   userMenuBtn.addEventListener('click', handleUserMenuButton, { passive: false });
-  userMenuBtn.addEventListener('touchend', handleUserMenuButton, { passive: false });
 }
 
 sessionButtons.forEach((button) => {
@@ -3333,6 +3414,9 @@ sessionButtons.forEach((button) => {
     }
     if (target === 'taxonomySession') {
       loadTaxonomies();
+    }
+    if (target === 'monitoriaSession') {
+      void loadMonitoriaSession();
     }
   });
 });
@@ -3518,7 +3602,47 @@ usersNextButton?.addEventListener('click', () => {
   renderUsersList(companyUsersCache);
 });
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[char]));
+}
+
+function documentDateLabel(value) {
+  if (!value) return 'Sem data';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleDateString('pt-BR');
+}
+
+function renderDocumentsState(title, description, retry = false) {
+  docsList.replaceChildren();
+  const item = document.createElement('li');
+  item.className = 'empty-state';
+  item.innerHTML = '<span class="feature-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-search"/></svg></span>';
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  const message = document.createElement('p');
+  message.textContent = description;
+  item.append(heading, message);
+  if (retry) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ghost';
+    button.textContent = 'Tentar novamente';
+    button.addEventListener('click', () => void loadPublishedDocs());
+    item.append(button);
+  }
+  docsList.append(item);
+}
+
 async function loadPublishedDocs() {
+  if (!hasModule('conteudo')) { docsList?.replaceChildren(); return; }
+  const requestId = ++docsRequestId;
+  docsList.setAttribute('aria-busy', 'true');
+  docsPrevButton.disabled = true;
+  docsNextButton.disabled = true;
+  docsPagerInfo.textContent = 'Atualizando documentos...';
+  if (!docsList.children.length) renderDocumentsState('Carregando documentos', 'Buscando o conhecimento da sua equipe.');
   const area = filterArea?.value || '';
   const categoria = filterCategoria?.value || '';
   const tag = document.getElementById('filterTag').value;
@@ -3534,7 +3658,7 @@ async function loadPublishedDocs() {
   if (categoria) query.set('categoria', categoria);
   if (tag) query.set('tag', tag);
   if (busca) query.set('busca', busca);
-  query.set('include_content', 'false');
+  query.set('include_content', 'true');
   query.set('include_unpublished', 'true');
   query.set('limit', String(clampedLimit));
   query.set('offset', String(offset));
@@ -3556,7 +3680,7 @@ async function loadPublishedDocs() {
 
   try {
     const canLoadUploadQueue = canViewUploadQueue();
-    const [data, processingData, failedData] = await Promise.all([
+    const [data, processingData, failedData, kbStatusData] = await Promise.all([
       apiFetch(`/api/v1/empresas/${state.companyId}/documentos?${query.toString()}`),
       canLoadUploadQueue
         ? apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=processing`)
@@ -3564,7 +3688,10 @@ async function loadPublishedDocs() {
       canLoadUploadQueue
         ? apiFetch(`/api/v1/empresas/${state.companyId}/documentos/processando?status=failed`)
         : Promise.resolve({ documentos: [] }),
+      apiFetch(`/api/v1/empresas/${state.companyId}/kb-status`).catch(() => ({})),
     ]);
+    if (requestId !== docsRequestId) return;
+    updateKbStatusAlert(kbStatusData);
     docsList.innerHTML = '';
     const processingDocs = (Array.isArray(processingData?.documentos) ? processingData.documentos : []).filter(matchesDashboardFilters);
     const failedDocs = (Array.isArray(failedData?.documentos) ? failedData.documentos : []).filter(matchesDashboardFilters);
@@ -3572,6 +3699,8 @@ async function loadPublishedDocs() {
     state.pendingApprovalTotal = Number.isFinite(Number(data?.pending_total)) ? Number(data.pending_total) : 0;
     updateDashboardApprovalStatus();
     pagination.total = Number.isFinite(Number(data?.total)) ? Number(data.total) : listedDocs.length;
+    document.getElementById('docsCount').textContent = pagination.total.toLocaleString('pt-BR');
+    document.getElementById('docsCount').title = 'Documentos que correspondem aos filtros; importações em andamento ou com falha aparecem à parte.';
     const publishedOffset = Math.max(0, offset);
     const pageFromOffset = Math.floor(publishedOffset / clampedLimit) + 1;
     pagination.page = pageFromOffset;
@@ -3604,7 +3733,16 @@ async function loadPublishedDocs() {
     }
 
     if (!allDocs.length) {
-      docsList.innerHTML = '<li>Nenhum documento encontrado para essa busca.</li>';
+      const statusMessage = formatKbStatusMessage(kbStatusData);
+      const hasFilters = Boolean(area || categoria || tag || busca);
+      renderDocumentsState(
+        statusMessage ? 'Preparando sua biblioteca' : hasFilters ? 'Nenhum documento encontrado' : 'Seu conhecimento começa aqui',
+        statusMessage ? 'Os documentos aparecerão conforme o índice for atualizado.' : hasFilters
+          ? 'Tente outra palavra ou use “Limpar filtros” para ampliar a busca.'
+          : canCreateNewDocument() ? 'Use “Novo documento” para importar um arquivo ou escrever o primeiro conteúdo.'
+            : 'Os documentos disponíveis para seu acesso aparecerão aqui quando forem publicados.',
+        Boolean(statusMessage),
+      );
       return;
     }
 
@@ -3612,7 +3750,7 @@ async function loadPublishedDocs() {
       const normalizedTags = normalizeTagValues(doc?.tags);
       const tagChips = normalizedTags
         .slice(0, 4)
-        .map((tagName) => `<span class="tag-chip">${tagName}</span>`)
+        .map((tagName) => `<span class="tag-chip">${escapeHtml(tagName)}</span>`)
         .join('');
       const tagsOverflow = normalizedTags.length > 4
         ? `<span class="tag-chip tag-chip--muted">+${normalizedTags.length - 4}</span>`
@@ -3624,31 +3762,33 @@ async function loadPublishedDocs() {
         ? '<span class="status-tag status-tag-draft">Rascunho</span>'
         : '';
       const pendingBadge = isPendingApprovalVersion(doc)
-        ? '<span class="status-tag status-tag-pending">Pendente aprovacao</span>'
+        ? '<span class="status-tag status-tag-pending">Aguardando aprovação</span>'
         : '';
+      const publishedBadge = doc._cardType === 'published'
+        ? '<span class="status-tag status-tag-success">Publicado</span>' : '';
       const item = document.createElement('li');
       if (doc._cardType === 'processing') {
         item.className = 'doc-item doc-item-processing';
         item.innerHTML = `
           <div class="doc-item-body">
-            <strong class="doc-title">${truncateForCard(doc?.title || doc?.file_name || doc?.slug || 'Documento')}</strong>
+            <strong class="doc-title">${escapeHtml(truncateForCard(doc?.title || doc?.file_name || doc?.slug || 'Documento'))}</strong>
             <div class="meta doc-meta-tags">
-              <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
-              <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              <span class="status-tag status-tag-neutral">${escapeHtml(doc?.area || 'Sem área')}</span>
+              <span class="status-tag status-tag-neutral">${escapeHtml(doc?.categoria || 'Sem categoria')}</span>
               <span class="status-tag status-tag-processing">Processando</span>
               ${tagChips}${tagsOverflow}
             </div>
           </div>
-          <span class="meta">${doc?.job_id || ''} · Início: ${doc?.created_at || ''}</span>
+          <span class="meta doc-updated">Importação iniciada<span>${escapeHtml(documentDateLabel(doc?.created_at))}</span></span>
         `;
       } else if (doc._cardType === 'failed') {
         item.className = 'doc-item doc-item-failed';
         item.innerHTML = `
           <div class="doc-item-body">
-            <strong class="doc-title">${truncateForCard(doc?.title || doc?.file_name || doc?.slug || 'Documento')}</strong>
+            <strong class="doc-title">${escapeHtml(truncateForCard(doc?.title || doc?.file_name || doc?.slug || 'Documento'))}</strong>
             <div class="meta doc-meta-tags">
-              <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
-              <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              <span class="status-tag status-tag-neutral">${escapeHtml(doc?.area || 'Sem área')}</span>
+              <span class="status-tag status-tag-neutral">${escapeHtml(doc?.categoria || 'Sem categoria')}</span>
               ${tagChips}${tagsOverflow}
               <button type="button" class="status-tag status-tag-failed">Falha</button>
             </div>
@@ -3662,35 +3802,35 @@ async function loadPublishedDocs() {
         });
       } else {
         item.className = 'doc-item';
-        item.tabIndex = 0;
         item.addEventListener('click', () => openDocumentModalFromPublished(doc));
-        item.addEventListener('keypress', (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            openDocumentModalFromPublished(doc);
-          }
-        });
         item.innerHTML = `
           <div class="doc-item-body">
-            <strong class="doc-title">${truncateForCard(docTitleOf(doc) || doc.slug || 'Documento')}</strong>
+            <button type="button" class="doc-open"><span class="doc-title">${escapeHtml(truncateForCard(docTitleOf(doc) || doc.slug || 'Documento'))}</span></button>
             <div class="meta doc-meta-tags">
-              <span class="status-tag status-tag-neutral">${doc?.area || 'sem-area'}</span>
-              <span class="status-tag status-tag-neutral">${doc?.categoria || 'sem-categoria'}</span>
+              <span class="status-tag status-tag-neutral">${escapeHtml(doc?.area || 'Sem área')}</span>
+              <span class="status-tag status-tag-neutral">${escapeHtml(doc?.categoria || 'Sem categoria')}</span>
+              ${publishedBadge}
               ${validityBadge}
               ${draftBadge}
               ${pendingBadge}
               ${tagChips}${tagsOverflow}
             </div>
           </div>
-          <span class="meta">v${docPublishedVersionOf(doc) || ''} · ${doc.updated_at || ''}</span>
+          <span class="meta doc-updated">${docPublishedVersionOf(doc) ? `Versão ${escapeHtml(docPublishedVersionOf(doc))}` : 'Sem versão publicada'}<span>${escapeHtml(documentDateLabel(doc.updated_at))}</span></span>
         `;
       }
+      const fileIcon = document.createElement('span');
+      fileIcon.className = 'doc-file-icon';
+      fileIcon.setAttribute('aria-hidden', 'true');
+      fileIcon.innerHTML = '<svg class="ui-icon"><use href="#icon-file"/></svg>';
+      item.prepend(fileIcon);
       const deleteWrap = document.createElement('div');
       deleteWrap.className = 'doc-card-actions';
       const editButton = document.createElement('button');
       editButton.type = 'button';
       editButton.className = 'doc-card-action';
-      editButton.textContent = '✎';
+      editButton.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-edit"/></svg>';
+      editButton.setAttribute('aria-label', `Editar ${docTitleOf(doc) || doc.slug || 'documento'}`);
       const editDisabled = doc._cardType !== 'published';
       editButton.disabled = editDisabled;
       if (editDisabled) {
@@ -3706,8 +3846,9 @@ async function loadPublishedDocs() {
       deleteWrap.appendChild(editButton);
       const deleteButton = document.createElement('button');
       deleteButton.type = 'button';
-      deleteButton.className = 'doc-card-action';
-      deleteButton.textContent = '🗑';
+      deleteButton.className = 'doc-card-action doc-card-action--danger';
+      deleteButton.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-trash"/></svg>';
+      deleteButton.setAttribute('aria-label', `Excluir ${docTitleOf(doc) || doc.slug || 'documento'}`);
       const deleteDisabled = doc._cardType === 'processing' || !doc?.slug || !canDeleteDocumentCard();
       deleteButton.disabled = deleteDisabled;
       if (doc._cardType === 'processing') {
@@ -3733,9 +3874,14 @@ async function loadPublishedDocs() {
       docsList.appendChild(item);
     }
   } catch (error) {
+    if (requestId !== docsRequestId) return;
     state.pendingApprovalTotal = 0;
     updateDashboardApprovalStatus();
-    docsList.innerHTML = `<li>${error.message}</li>`;
+    document.getElementById('docsCount').textContent = '—';
+    docsPagerInfo.textContent = 'Não foi possível atualizar a lista.';
+    renderDocumentsState('Não foi possível carregar os documentos', error.message, true);
+  } finally {
+    if (requestId === docsRequestId) docsList.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -4084,6 +4230,8 @@ if (addUserForm) {
           password,
           role,
           profile_ids,
+          modules: selectedModules('newUser'),
+          monitoria_role: document.getElementById('newUserMonitoriaRole').value,
         }),
       });
       if (newUserName) newUserName.value = '';
@@ -4200,6 +4348,24 @@ function resetPaginationAndLoadPublishedDocs() {
   void loadPublishedDocs();
 }
 
+document.getElementById('clearDocFilters').addEventListener('click', () => {
+  window.clearTimeout(docsSearchDebounceTimer);
+  filterArea.value = '';
+  updateFilterCategoriaOptions();
+  filterCategoria.value = '';
+  document.getElementById('filterTag').value = '';
+  document.getElementById('filterBusca').value = '';
+  document.getElementById('sortDocs').value = 'created_desc';
+  resetPaginationAndLoadPublishedDocs();
+});
+
+function returnToDocuments() {
+  showInlineCreateSession(false);
+  refreshDocsButton.focus();
+}
+document.getElementById('backToDocuments').addEventListener('click', returnToDocuments);
+document.getElementById('cancelDocument').addEventListener('click', returnToDocuments);
+
 filterArea?.addEventListener('change', () => {
   updateFilterCategoriaOptions();
   resetPaginationAndLoadPublishedDocs();
@@ -4260,13 +4426,83 @@ if (brandHomeWrap || brandHomeLink) {
   });
 }
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && userAccessModal.classList.contains('open')) {
+    closeUserAccessModal();
+    return;
+  }
   if (event.key === 'Escape' && docModal.classList.contains('open')) {
     closeDocumentModal();
     return;
   }
   if (event.key === 'Escape') {
+    if (userMenuDropdown.classList.contains('is-open')) userMenuBtn.focus();
     hideUserMenu();
   }
+});
+
+// Dialogs share keyboard containment and restore focus to their opening control.
+let activeDialog = null;
+let dialogReturnFocus = null;
+const dialogObserver = new MutationObserver(() => {
+  const openModal = Array.from(document.querySelectorAll('.doc-modal.open')).at(-1);
+  if (openModal === activeDialog) return;
+  if (openModal) {
+    if (!activeDialog) dialogReturnFocus = document.activeElement;
+    activeDialog = openModal;
+    const dialog = openModal.querySelector('[role="dialog"]');
+    dialog.tabIndex = -1;
+    const firstControl = dialog.querySelector('button:not(:disabled), input:not(:disabled)');
+    (firstControl || dialog).focus();
+  } else {
+    activeDialog = null;
+  }
+  document.querySelectorAll('.topbar, main, .platform-footer').forEach((element) => {
+    element.inert = Boolean(openModal);
+  });
+  if (!openModal && dialogReturnFocus?.isConnected) {
+    dialogReturnFocus.focus();
+    dialogReturnFocus = null;
+  }
+});
+document.querySelectorAll('.doc-modal').forEach((modal) => {
+  dialogObserver.observe(modal, { attributes: true, attributeFilter: ['class'] });
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab' || !activeDialog) return;
+  const controls = Array.from(activeDialog.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"]'))
+    .filter((element) => !element.disabled && element.getClientRects().length && element.tabIndex >= 0);
+  const first = controls[0];
+  const last = controls.at(-1);
+  if (!first) {
+    event.preventDefault();
+    activeDialog.querySelector('[role="dialog"]').focus();
+  } else if (event.shiftKey && (document.activeElement === first || !controls.includes(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !controls.includes(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+userMenuBtn.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown') return;
+  event.preventDefault();
+  setUserMenuOpen(true);
+  userMenuDropdown.querySelector('button:not(.hidden-view)')?.focus();
+});
+userMenuDropdown.addEventListener('keydown', (event) => {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const items = Array.from(userMenuDropdown.querySelectorAll('button')).filter((item) => item.getClientRects().length);
+  const index = items.indexOf(document.activeElement);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+    : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+  items[next]?.focus();
+});
+userMenu.addEventListener('focusout', () => {
+  requestAnimationFrame(() => {
+    if (!userMenu.contains(document.activeElement)) hideUserMenu();
+  });
 });
 
 document.addEventListener('click', (event) => {
@@ -4372,6 +4608,526 @@ window.__expaiMenu = {
   },
 };
 
+const monitoriaState = { page: 0, limit: 10, total: 0, selectedUuid: '', centrals: [], teams: [], pillars: [], requestId: 0, detailId: 0, audioUrl: '', scope: null, detail: null, duration: 0, position: 0, frame: 0, activeTurns: '', selectedScore: null };
+const mon = (id) => document.getElementById(`monitoria${id}`);
+// The platform header wraps on small screens; keep the review player below it.
+const monitoriaHeader = document.querySelector('.topbar');
+if (monitoriaHeader) new ResizeObserver(() => {
+  mon('Session').style.setProperty('--topbar-h', `${monitoriaHeader.getBoundingClientRect().height}px`);
+}).observe(monitoriaHeader);
+const monitoriaStatus = (value) => ({ queued: 'Na fila', processing: 'Em análise', completed: 'Concluída', failed: 'Falhou' }[value] || value);
+const monitoriaFilters = { Central: 'area', Team: 'categoria', Cliente: 'cliente', Status: 'status', Pillar: 'pillar_id', Tipo: 'tipo', Operador: 'operador_user_id', Analista: 'analista_user_id' };
+const monitoriaScore = (value) => value == null ? '—' : Number(value).toFixed(1);
+const monitoriaTime = (value) => `${String(Math.floor((value || 0) / 60)).padStart(2, '0')}:${String(Math.floor((value || 0) % 60)).padStart(2, '0')}`;
+function monitoriaCompanyPath(suffix) { return `/api/v1/empresas/${state.companyId}/monitoria${suffix}`; }
+function monitoriaError(error) { const message = error.message || 'Falha ao carregar Monitoria.'; mon('Msg').textContent = message; showToast(message, 'error'); }
+function monitoriaRun(action) { return Promise.resolve().then(action).catch(monitoriaError); }
+function setMonitoriaTab(name) {
+  if (name !== 'conversas') mon('Audio').pause();
+  if (name !== 'upload') stopMonitoriaBatchPolling();
+  document.querySelectorAll('[data-monitoria-tab]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.monitoriaTab === name);
+    button.setAttribute('aria-current', button.dataset.monitoriaTab === name ? 'page' : 'false');
+  });
+  for (const tab of ['Conversas', 'Upload', 'Pilares', 'Org', 'Config']) mon(`Tab${tab}`).classList.toggle('hidden-view', tab.toLowerCase() !== name);
+  if (name === 'upload') { resetMonitoriaBatchContext(); refreshMonitoriaBatches(); }
+}
+function monitoriaSelect(id, items, first = 'Todos') {
+  const element = mon(id), selected = element.value;
+  element.replaceChildren(new Option(first, ''));
+  for (const item of items) element.add(new Option(item.name, item.id));
+  if ([...element.options].some((option) => option.value === selected)) element.value = selected;
+}
+function monitoriaTeamSelects() {
+  for (const [team, central] of [['FilterTeam', 'FilterCentral'], ['UploadTeam', 'UploadCentral'], ['ClassifyCategory', 'ClassifyArea']]) {
+    const selected = mon(central).value;
+    monitoriaSelect(team, monitoriaState.teams.filter(item => selected && item.central_id === selected), 'Sem categoria / todas');
+  }
+}
+async function loadMonitoriaCentrals() {
+  const company = state.companyId;
+  const taxonomy = await apiFetch(monitoriaCompanyPath('/taxonomias'));
+  if (state.companyId !== company) return;
+  monitoriaState.centrals = taxonomy.areas.map(name => ({ id: name, name }));
+  monitoriaState.teams = taxonomy.categorias.map(c => ({ id: c.name, name: c.name, central_id: c.area }));
+  for (const id of ['FilterCentral', 'UploadCentral', 'ClassifyArea']) monitoriaSelect(id, monitoriaState.centrals, id === 'FilterCentral' ? 'Todas as áreas' : 'Selecione uma área');
+  monitoriaTeamSelects();
+  mon('CentralsList').innerHTML = taxonomy.areas.map(area => `<li>${escapeHtml(area)}</li>`).join('') || '<li class="helper">Nenhuma área disponível. Use o cadastro existente da Gestão de Conteúdo.</li>';
+  mon('TeamsList').innerHTML = taxonomy.categorias.map(c => `<li><strong>${escapeHtml(c.name)}</strong><span>${escapeHtml(c.area)}</span></li>`).join('') || '<li class="helper">Nenhuma categoria disponível.</li>';
+}
+async function loadMonitoriaPillars() {
+  const data = await apiFetch(monitoriaCompanyPath('/pilares?active_only=false'));
+  const revisions = data.items || [];
+  monitoriaState.pillars = revisions.filter((p) => p.is_active);
+  const select = mon('FilterPillar'), previous = select.value;
+  select.replaceChildren(new Option('Todos os pilares', ''));
+  const families = new Map();
+  for (const pillar of revisions) {
+    if (!families.has(pillar.family_id)) families.set(pillar.family_id, []);
+    families.get(pillar.family_id).push(pillar);
+  }
+  for (const [familyId, versions] of families) {
+    const group = document.createElement('optgroup'); group.label = versions[0].name;
+    group.appendChild(new Option(`${versions[0].name} · todas as versões`, `family:${familyId}`));
+    for (const version of versions) group.appendChild(new Option(`${version.name} · v${version.version}${version.is_active ? ' (ativa)' : ' (inativa)'}`, `version:${version.id}`));
+    select.appendChild(group);
+  }
+  if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+  mon('PillarsList').innerHTML = monitoriaState.pillars.map((p) => `<li><div><strong>${escapeHtml(p.name)}</strong><div class="meta">Agente especialista · versão ${p.version} · peso ${p.weight}</div><p>${escapeHtml(p.description)}</p><div class="helper">${escapeHtml(p.prompt)}</div></div></li>`).join('') || '<li class="helper">Crie um pilar ou carregue a demonstração para começar.</li>';
+}
+function resetMonitoriaDetail() {
+  monitoriaState.detailId += 1;
+  monitoriaState.selectedUuid = '';
+  monitoriaState.detail = null; monitoriaState.position = 0; monitoriaState.duration = 0; monitoriaState.activeTurns = ''; monitoriaState.selectedScore = null;
+  cancelAnimationFrame(monitoriaState.frame);
+  mon('TabConversas').classList.remove('is-reviewing');
+  mon('PlayPause').classList.add('hidden-view'); mon('LoadAudio').disabled = false; mon('LoadAudio').textContent = '▶ Ouvir áudio';
+  mon('Speed').value = '1'; mon('Zoom').value = '1'; mon('Follow').checked = true;
+  mon('AudioStatus').textContent = 'Carregue o áudio para ouvir. Você já pode explorar as falas e notas.';
+  mon('DetailContent').classList.add('hidden-view'); mon('DetailEmpty').classList.remove('hidden-view');
+  mon('Audio').pause(); mon('Audio').removeAttribute('src'); mon('Audio').load();
+  mon('Audio').classList.add('hidden-view'); mon('LoadAudio').classList.remove('hidden-view');
+  if (monitoriaState.audioUrl) URL.revokeObjectURL(monitoriaState.audioUrl);
+  monitoriaState.audioUrl = '';
+}
+function renderMonitoriaConversations(items) {
+  const filterCount = Object.keys(monitoriaFilters).filter((key) => mon(`Filter${key}`).value).length;
+  mon('FilterCount').textContent = filterCount ? `${filterCount} filtro(s) ativo(s)` : 'Todos os atendimentos';
+  const filtered = filterCount > 0;
+  const empty = !items.length && !filtered && !monitoriaState.page;
+  mon('EmptyState').classList.toggle('hidden-view', !empty);
+  document.querySelector('.monitoria-master-detail').classList.toggle('hidden-view', empty);
+  mon('ConversasList').innerHTML = items.map((c) => `<li class="doc-item ${c.conversation_uuid === monitoriaState.selectedUuid ? 'is-selected' : ''}"><button class="monitoria-conversation" data-uuid="${escapeHtml(c.conversation_uuid)}" aria-pressed="${c.conversation_uuid === monitoriaState.selectedUuid}"><span class="monitoria-conversation-top"><strong>${escapeHtml(c.ticket_id || c.conversation_uuid.slice(0, 8))}</strong><span class="badge">${escapeHtml(monitoriaStatus(c.status))}</span></span><span>${escapeHtml(c.cliente || 'Cliente sem identificação')}</span><span class="meta">${escapeHtml([c.area, c.categoria].filter(Boolean).join(' / ') || 'Sem classificação')} · ${escapeHtml(c.tipo || 'Atendimento')}</span><span class="meta">Operador: ${escapeHtml(c.operador_name || 'Não atribuído')}</span><span class="monitoria-conversation-score">${monitoriaScore(c.score)} <small>/ 100 · ${c.is_mock ? 'simulado' : 'avaliação'}</small></span></button></li>`).join('') || '<li class="helper">Nenhuma conversa encontrada. Ajuste ou limpe os filtros.</li>';
+  mon('ConversasList').querySelectorAll('[data-uuid]').forEach((button) => button.addEventListener('click', () => monitoriaRun(() => openMonitoriaConversation(button.dataset.uuid))));
+  mon('PagerInfo').textContent = `${monitoriaState.page + 1}/${Math.max(1, Math.ceil(monitoriaState.total / monitoriaState.limit))} · ${monitoriaState.total} conversas`;
+  mon('PrevPage').disabled = monitoriaState.page <= 0;
+  mon('NextPage').disabled = (monitoriaState.page + 1) * monitoriaState.limit >= monitoriaState.total;
+}
+async function loadMonitoriaConversations() {
+  const requestId = ++monitoriaState.requestId, company = state.companyId;
+  const params = new URLSearchParams({ limit: monitoriaState.limit, offset: monitoriaState.page * monitoriaState.limit });
+  for (const [key, param] of Object.entries(monitoriaFilters)) {
+    const value = mon(`Filter${key}`).value.trim();
+    if (!value) continue;
+    if (key === 'Pillar') {
+      const [kind, id] = value.split(':');
+      params.set(kind === 'family' ? 'pillar_family_id' : 'pillar_id', id);
+    } else params.set(param, value);
+  }
+  mon('ConversasList').setAttribute('aria-busy', 'true');
+  try {
+    const data = await apiFetch(`${monitoriaCompanyPath('/conversas')}?${params}`);
+    if (requestId !== monitoriaState.requestId || company !== state.companyId) return;
+    monitoriaState.total = data.total;
+    if (monitoriaState.selectedUuid && !data.items.some((c) => c.conversation_uuid === monitoriaState.selectedUuid)) resetMonitoriaDetail();
+    renderMonitoriaConversations(data.items);
+    const summary = data.summary || {};
+    mon('Metrics').innerHTML = [[data.total, 'Conversas nos filtros'], [summary.completed || 0, 'Análises concluídas'], [monitoriaScore(summary.average_score), 'Nota média ponderada / 100'], [summary.failed || 0, 'Análises com falha']].map(([value, label]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join('');
+    mon('Msg').textContent = '';
+  } catch (error) {
+    if (requestId !== monitoriaState.requestId) return;
+    resetMonitoriaDetail(); mon('Metrics').textContent = '';
+    mon('ConversasList').innerHTML = '<li class="helper">Não foi possível carregar. Use Atualizar para tentar novamente.</li>';
+    mon('PrevPage').disabled = mon('NextPage').disabled = true;
+    throw error;
+  } finally { if (requestId === monitoriaState.requestId) mon('ConversasList').setAttribute('aria-busy', 'false'); }
+}
+function renderMonitoriaTimeline(detail) {
+  mon('PillarSummary').innerHTML = (detail.pillar_scores || []).map((p) => `<span class="monitoria-pillar-chip" title="${escapeHtml(p.rationale)}"><span>${escapeHtml(p.pillar_name)} · v${p.pillar_version}</span><strong>${monitoriaScore(p.score)}</strong><small>peso ${p.weight}</small></span>`).join('');
+  renderMonitoriaTracks();
+  mon('CriteriaSnapshot').innerHTML = (detail.pillar_scores || []).map((p) => `<div><strong>${escapeHtml(p.pillar_name)} · v${p.pillar_version}</strong>${p.snapshot_available ? `<p>${escapeHtml(p.description || '')}</p><p>${escapeHtml(p.prompt || 'Sem instrução adicional.')} · Peso ${p.weight}</p>` : '<p>Critério histórico indisponível: esta avaliação é anterior ao armazenamento de cópias dos critérios.</p>'}</div>`).join('');
+  mon('Evidence').textContent = 'Selecione uma nota para explorar a avaliação simulada.';
+}
+function monitoriaDuration() {
+  return Math.max(1, monitoriaState.duration, ...((monitoriaState.detail?.turns || []).map((t) => Number(t.t_end))));
+}
+function renderMonitoriaTracks() {
+  const detail = monitoriaState.detail, host = mon('TelemetryList');
+  if (!detail?.telemetry?.length) { host.innerHTML = '<p class="helper">A telemetria aparecerá quando o processamento terminar.</p>'; return; }
+  const duration = monitoriaDuration(), turns = detail.turns || [];
+  const position = (t) => `left:${Number(t.t_start) / duration * 100}%;width:${(Number(t.t_end) - Number(t.t_start)) / duration * 100}%`;
+  const ticks = Array.from({ length: 5 }, (_, i) => `<span style="left:${i * 25}%">${monitoriaTime(duration * i / 4)}</span>`).join('');
+  const lane = (label, body, extra = '') => `<div class="monitoria-track-row ${extra}"><div class="monitoria-track-label">${label}</div><div class="monitoria-track">${body}<i class="monitoria-playhead" aria-hidden="true"></i></div></div>`;
+  const speakerLane = (speaker, name) => lane(name, turns.filter((t) => t.speaker === speaker).map((t) => `<button type="button" class="monitoria-speech-segment ${speaker}" style="${position(t)}" data-turn="${t.turn_index}" aria-label="${name}, ${monitoriaTime(t.t_start)} a ${monitoriaTime(t.t_end)}" title="${name} · ${monitoriaTime(t.t_start)}–${monitoriaTime(t.t_end)}"><span>${name}</span></button>`).join(''), 'monitoria-speaker-row');
+  const scoreIndex = new Map(detail.telemetry.map((item) => [`${item.pillar_id}:${item.turn_index}`, item]));
+  host.innerHTML = `<div class="monitoria-track-canvas" style="min-width:${640 * Number(mon('Zoom').value)}px">${lane('Tempo', ticks, 'monitoria-ruler')}${speakerLane('cliente', 'Cliente')}${speakerLane('operador', 'Operador')}${detail.pillar_scores.map((p) => lane(`<strong>${escapeHtml(p.pillar_name)}</strong><small>${monitoriaScore(p.score)} / 100</small>`, turns.map((t) => {
+    const score = scoreIndex.get(`${p.pillar_id}:${t.turn_index}`); if (!score) return '';
+    return `<button type="button" class="monitoria-score-cell ${score.score < 65 ? 'needs-attention' : score.score >= 80 ? 'good-score' : 'medium-score'}" style="${position(t)}" data-turn="${t.turn_index}" data-pillar="${p.pillar_id}" aria-pressed="${monitoriaState.selectedScore === `${p.pillar_id}:${t.turn_index}`}" aria-label="${escapeHtml(p.pillar_name)}, ${monitoriaTime(t.t_start)} a ${monitoriaTime(t.t_end)}, nota ${monitoriaScore(score.score)}" title="${escapeHtml(p.pillar_name)} · ${monitoriaTime(t.t_start)} · ${monitoriaScore(score.score)}/100"><span>${monitoriaScore(score.score)}</span></button>`;
+  }).join(''), 'monitoria-pillar-track')).join('')}</div>`;
+  host.querySelectorAll('[data-turn]').forEach((button) => button.addEventListener('click', () => {
+    const turn = turns.find((t) => t.turn_index === Number(button.dataset.turn));
+    if (button.dataset.pillar) {
+      monitoriaState.selectedScore = `${button.dataset.pillar}:${button.dataset.turn}`;
+      host.querySelectorAll('[data-pillar]').forEach((b) => b.setAttribute('aria-pressed', String(b === button)));
+      const item = scoreIndex.get(`${button.dataset.pillar}:${button.dataset.turn}`);
+      mon('Evidence').textContent = `${item.pillar_name} · ${monitoriaTime(turn.t_start)}–${monitoriaTime(turn.t_end)} · ${monitoriaScore(item.score)}/100. ${item.evidence}`;
+    }
+    seekMonitoria(turn.t_start, true);
+  }));
+  monitoriaState.activeTurns = '';
+  syncMonitoriaPosition(monitoriaState.position);
+}
+function syncMonitoriaPosition(time, forceFollow = false) {
+  if (!monitoriaState.detail) return;
+  const duration = monitoriaDuration();
+  monitoriaState.position = Math.max(0, Math.min(Number(time) || 0, duration));
+  const position = monitoriaState.position;
+  mon('PlaybackTime').textContent = `${monitoriaTime(position)} / ${monitoriaTime(duration)}`;
+  mon('Seek').max = duration; mon('Seek').value = position;
+  mon('Seek').setAttribute('aria-valuetext', `${monitoriaTime(position)} de ${monitoriaTime(duration)}`);
+  mon('TelemetryList').style.setProperty('--play-position', `${position / duration * 100}%`);
+  const active = (monitoriaState.detail.turns || []).filter((t) => position >= t.t_start && position < t.t_end).map((t) => String(t.turn_index));
+  const changed = monitoriaState.activeTurns !== active.join(','); monitoriaState.activeTurns = active.join(',');
+  if (changed || forceFollow) {
+    mon('Chat').querySelectorAll('[data-turn]').forEach((bubble) => {
+      const current = active.includes(bubble.dataset.turn);
+      bubble.classList.toggle('is-highlighted', current);
+      if (current) bubble.setAttribute('aria-current', 'true'); else bubble.removeAttribute('aria-current');
+    });
+    mon('TelemetryList').querySelectorAll('[data-turn]').forEach((b) => b.classList.toggle('is-playing', active.includes(b.dataset.turn)));
+    if (forceFollow || mon('Follow').checked) {
+      const bubble = mon('Chat').querySelector('.is-highlighted');
+      // Scroll only the transcript; never move the page during playback.
+      if (bubble) {
+        const chatRect = mon('Chat').getBoundingClientRect(), rect = bubble.getBoundingClientRect();
+        if (rect.top < chatRect.top || rect.bottom > chatRect.bottom) mon('Chat').scrollTop += rect.top - chatRect.top - 16;
+      }
+    }
+  }
+}
+function seekMonitoria(time, follow = false) {
+  const audio = mon('Audio');
+  if (audio.readyState > 0 && Number.isFinite(audio.duration)) audio.currentTime = Math.min(Number(time), audio.duration);
+  syncMonitoriaPosition(time, follow);
+  if (follow) revealMonitoriaPosition();
+}
+function revealMonitoriaPosition() {
+  const host = mon('TelemetryList'), track = host.querySelector('.monitoria-track');
+  if (!track || !host.clientWidth) return;
+  const labelWidth = track.offsetLeft;
+  const x = labelWidth + track.clientWidth * monitoriaState.position / monitoriaDuration();
+  if (x > host.scrollLeft + host.clientWidth - 16 || x < host.scrollLeft + labelWidth) host.scrollLeft = Math.max(0, x - labelWidth - 32);
+}
+function animateMonitoriaPlayback() {
+  cancelAnimationFrame(monitoriaState.frame);
+  if (!mon('Audio').paused && monitoriaState.detail) {
+    syncMonitoriaPosition(mon('Audio').currentTime);
+    if (mon('Follow').checked) revealMonitoriaPosition();
+    monitoriaState.frame = requestAnimationFrame(animateMonitoriaPlayback);
+  }
+}
+
+async function openMonitoriaConversation(uuid) {
+  resetMonitoriaDetail(); monitoriaState.selectedUuid = uuid;
+  mon('TabConversas').classList.add('is-reviewing');
+  const detailId = ++monitoriaState.detailId, company = state.companyId;
+  mon('DetailEmpty').textContent = 'Carregando conversa…';
+  try {
+    const detail = await apiFetch(monitoriaCompanyPath(`/conversas/${uuid}`));
+    if (detailId !== monitoriaState.detailId || company !== state.companyId) return;
+    mon('DetailContent').classList.remove('hidden-view'); mon('DetailEmpty').classList.add('hidden-view');
+    mon('Msg').textContent = '';
+    monitoriaState.detail = detail;
+    mon('DetailTitle').textContent = detail.ticket_id || 'Conversa';
+    mon('OverallScore').textContent = monitoriaScore(detail.score);
+    mon('TabConversas').classList.add('is-reviewing');
+    mon('DetailMeta').textContent = [detail.cliente, detail.tipo, detail.area || 'Sem classificação', detail.categoria, detail.operador_user_id ? `Operador ${detail.operador_user_id}` : '', detail.analista_user_id ? `Analista ${detail.analista_user_id}` : '', monitoriaStatus(detail.status)].filter(Boolean).join(' · ');
+    mon('ClassifyArea').value = detail.area || ''; monitoriaTeamSelects(); mon('ClassifyCategory').value = detail.categoria || '';
+    mon('DetailStatus').textContent = detail.error_message || (detail.is_mock ? 'Simulação: estas falas e notas não representam o conteúdo do arquivo de áudio.' : '');
+    mon('Chat').innerHTML = (detail.turns || []).map((t) => `<button type="button" data-turn="${t.turn_index}" class="monitoria-bubble monitoria-bubble--${t.speaker === 'operador' ? 'operador' : 'cliente'}"><small><strong>${t.speaker === 'operador' ? 'Operador' : 'Cliente'}</strong> · ${monitoriaTime(t.t_start)}–${monitoriaTime(t.t_end)}</small><span>${escapeHtml(t.text)}</span></button>`).join('') || '<p class="helper">Transcrição ainda não disponível.</p>';
+    renderMonitoriaTimeline(detail);
+    syncMonitoriaPosition(0, true);
+    mon('Chat').querySelectorAll('[data-turn]').forEach((b) => b.addEventListener('click', () => seekMonitoria(detail.turns.find((t) => t.turn_index === Number(b.dataset.turn)).t_start, true)));
+    if (matchMedia('(max-width: 1000px)').matches) { mon('DetailTitle').focus({ preventScroll: true }); mon('DetailContent').scrollIntoView({ block: 'start' }); }
+    document.querySelectorAll('.monitoria-conversation').forEach((b) => { b.setAttribute('aria-pressed', String(b.dataset.uuid === uuid)); b.closest('li').classList.toggle('is-selected', b.dataset.uuid === uuid); });
+  } catch (error) { if (detailId === monitoriaState.detailId) mon('DetailEmpty').textContent = 'Não foi possível abrir. Selecione a conversa para tentar novamente.'; throw error; }
+}
+function renderMonitoriaRuntime(runtime) {
+  if (!runtime) return;
+  monitoriaState.runtime = runtime;
+  mon('ModeLabel').textContent = runtime.real_ai_enabled ? 'Modo IA real' : 'Modo simulado · IA real desativada';
+  mon('ModeDescription').textContent = runtime.real_ai_enabled
+    ? (runtime.ready ? 'Novos uploads usam o provedor real configurado. Os exemplos de demonstração continuam simulados.' : `${runtime.reason}. A demonstração usa dados fictícios e também respeita a pausa do processamento.`)
+    : 'Transcrições e notas são fictícias, inclusive para áudios enviados. Nenhuma IA externa é chamada. Os áudios de exemplo contêm silêncio.';
+  mon('RuntimeStatus').textContent = `IA real: ${runtime.real_ai_enabled ? 'ativada' : 'desativada'} · Provedor efetivo: ${runtime.effective_provider}.${runtime.reason ? ` ${runtime.reason}.` : ''}`;
+  mon('Provider').querySelectorAll('option').forEach((option) => { option.disabled = !runtime.real_ai_enabled && option.value !== 'mock'; });
+  mon('Provider').value = runtime.configured_provider;
+  mon('Provider').disabled = !runtime.real_ai_enabled;
+}
+async function loadMonitoriaSession() {
+  resetMonitoriaBatchContext();
+  resetMonitoriaDetail(); mon('DetailEmpty').textContent = 'Selecione uma conversa para ver a transcrição e a telemetria.';
+  for (const id of ['ConversasList', 'Metrics', 'CentralsList', 'TeamsList', 'PillarsList']) mon(id).replaceChildren();
+  mon('Msg').textContent = 'Carregando Monitoria…';
+  setMonitoriaTab('conversas');
+  document.querySelectorAll('[data-monitoria-admin], [data-monitoria-write]').forEach((el) => el.classList.add('hidden-view'));
+  try {
+    const company = state.companyId;
+    const scope = await apiFetch(monitoriaCompanyPath('/escopo'));
+    if (company !== state.companyId) return;
+    monitoriaState.scope = scope;
+    renderMonitoriaRuntime(scope.runtime);
+    const writer = scope.is_full_access || scope.roles.some((r) => ['monitoria_supervisor', 'monitoria_analista', 'monitoria_admin'].includes(r));
+    document.querySelectorAll('[data-monitoria-admin]').forEach((el) => el.classList.toggle('hidden-view', !scope.is_full_access));
+    document.querySelectorAll('[data-monitoria-write]').forEach((el) => el.classList.toggle('hidden-view', !writer));
+    mon('ScopeLabel').textContent = scope.is_full_access ? 'Seu acesso: todas as conversas desta empresa.' : `Seu acesso: ${scope.roles.map((r) => r.replace('monitoria_', '')).join(', ') || 'nenhum perfil de Monitoria'}. Os resultados respeitam as restrições de áreas da Gestão de Acessos.`;
+    await Promise.all([loadMonitoriaCentrals(), loadMonitoriaPillars()]);
+    await loadMonitoriaConversations();
+    if (scope.is_full_access) {
+      const settings = await apiFetch(monitoriaCompanyPath('/ai-settings'));
+      mon('Enabled').value = String(Boolean(settings.is_enabled));
+      renderMonitoriaRuntime(settings.runtime);
+
+    }
+  } catch (error) { monitoriaError(error); }
+}
+document.querySelectorAll('[data-monitoria-tab]').forEach((b) => b.addEventListener('click', () => setMonitoriaTab(b.dataset.monitoriaTab)));
+mon('GoUploadBtn').addEventListener('click', () => setMonitoriaTab('upload'));
+mon('RefreshList').addEventListener('click', () => monitoriaRun(loadMonitoriaConversations));
+mon('ClearFilters').addEventListener('click', () => { for (const key of Object.keys(monitoriaFilters)) mon(`Filter${key}`).value = ''; monitoriaState.page = 0; resetMonitoriaDetail(); monitoriaTeamSelects(); monitoriaRun(loadMonitoriaConversations); });
+let monitoriaFilterTimer;
+for (const key of Object.keys(monitoriaFilters)) mon(`Filter${key}`).addEventListener(mon(`Filter${key}`).tagName === 'SELECT' ? 'change' : 'input', () => { clearTimeout(monitoriaFilterTimer); monitoriaState.page = 0; resetMonitoriaDetail(); if (key === 'Central') { mon('FilterTeam').value = ''; monitoriaTeamSelects(); } monitoriaFilterTimer = setTimeout(() => monitoriaRun(loadMonitoriaConversations), 250); });
+for (const id of ['UploadCentral', 'ClassifyArea']) mon(id).addEventListener('change', monitoriaTeamSelects);
+for (const [id, delta] of [['PrevPage', -1], ['NextPage', 1]]) mon(id).addEventListener('click', () => { monitoriaState.page = Math.max(0, monitoriaState.page + delta); resetMonitoriaDetail(); monitoriaRun(loadMonitoriaConversations); });
+mon('CreateDemoBtn').addEventListener('click', () => monitoriaRun(async () => {
+  const button = mon('CreateDemoBtn'); button.disabled = true; button.textContent = 'Preparando demonstração…';
+  try {
+    const data = await apiFetch(monitoriaCompanyPath('/demo'), { method: 'POST' });
+    for (const key of Object.keys(monitoriaFilters)) mon(`Filter${key}`).value = '';
+    monitoriaState.page = 0;
+    await loadMonitoriaCentrals(); await loadMonitoriaPillars(); await loadMonitoriaConversations();
+    setMonitoriaTab('conversas');
+    if (data.items[0]) await openMonitoriaConversation(data.items[0].conversation_uuid);
+    showToast('Demonstração pronta: três conversas fictícias.');
+  } finally { button.disabled = false; button.textContent = 'Carregar demonstração'; }
+}));
+let monitoriaTimelineWidth = 0;
+new ResizeObserver(([entry]) => {
+  if (entry.contentRect.width === monitoriaTimelineWidth) return;
+  monitoriaTimelineWidth = entry.contentRect.width;
+  if (monitoriaState.detail && mon('Follow').checked) {
+    syncMonitoriaPosition(monitoriaState.position, true); revealMonitoriaPosition();
+  }
+}).observe(mon('TelemetryList'));
+mon('BackToList').addEventListener('click', () => {
+  const uuid = monitoriaState.selectedUuid;
+  resetMonitoriaDetail();
+  mon('ConversasList').querySelector(`[data-uuid="${uuid}"]`)?.focus();
+});
+mon('Zoom').addEventListener('change', renderMonitoriaTracks);
+mon('Seek').addEventListener('input', (event) => seekMonitoria(Number(event.target.value), true));
+mon('Rewind').addEventListener('click', () => seekMonitoria(Math.max(0, monitoriaState.position - 10), true));
+mon('Speed').addEventListener('change', () => { mon('Audio').playbackRate = Number(mon('Speed').value); });
+mon('Follow').addEventListener('change', () => { if (mon('Follow').checked) syncMonitoriaPosition(monitoriaState.position, true); });
+mon('PlayPause').addEventListener('click', () => monitoriaRun(async () => {
+  const detailId = monitoriaState.detailId;
+  try {
+    if (mon('Audio').paused) await mon('Audio').play(); else mon('Audio').pause();
+  } catch (error) {
+    // Navigation and an immediate pause may legitimately cancel a pending play().
+    if (error.name !== 'AbortError' && detailId === monitoriaState.detailId) throw new Error('Não foi possível iniciar o áudio. Tente carregar o arquivo novamente.');
+  }
+}));
+mon('Audio').addEventListener('play', () => {
+  mon('PlayPause').textContent = 'Ⅱ Pausar'; mon('PlayPause').setAttribute('aria-label', 'Pausar áudio'); animateMonitoriaPlayback();
+});
+mon('Audio').addEventListener('pause', () => {
+  mon('PlayPause').textContent = '▶ Reproduzir'; mon('PlayPause').setAttribute('aria-label', 'Reproduzir áudio'); cancelAnimationFrame(monitoriaState.frame);
+});
+mon('Audio').addEventListener('timeupdate', () => syncMonitoriaPosition(mon('Audio').currentTime));
+mon('Audio').addEventListener('loadedmetadata', () => {
+  if (!monitoriaState.detail || !Number.isFinite(mon('Audio').duration)) return;
+  const pending = monitoriaState.position;
+  monitoriaState.duration = mon('Audio').duration;
+  mon('Audio').playbackRate = Number(mon('Speed').value);
+  renderMonitoriaTracks(); seekMonitoria(Math.min(pending, mon('Audio').duration), true);
+  const transcriptEnd = Math.max(0, ...monitoriaState.detail.turns.map((t) => t.t_end));
+  mon('AudioStatus').textContent = Math.abs(transcriptEnd - mon('Audio').duration) > 1
+    ? 'O áudio e a transcrição simulada têm durações diferentes. A timeline preserva os horários da transcrição.'
+    : 'Áudio carregado · Falas e notas acompanham a reprodução. Os exemplos contêm silêncio.';
+});
+mon('Audio').addEventListener('error', () => {
+  if (!mon('Audio').getAttribute('src')) return;
+  mon('AudioStatus').textContent = 'Não foi possível reproduzir este arquivo. Tente carregar novamente; a transcrição continua disponível.';
+  mon('PlayPause').classList.add('hidden-view'); mon('LoadAudio').classList.remove('hidden-view');
+});
+mon('LoadAudio').addEventListener('click', () => monitoriaRun(async () => {
+  const uuid = monitoriaState.selectedUuid, detailId = monitoriaState.detailId;
+  const button = mon('LoadAudio'); button.disabled = true; button.textContent = 'Carregando…';
+  try {
+    const response = await fetch(monitoriaCompanyPath(`/conversas/${uuid}/audio`), { headers: state.token ? { Authorization: `Bearer ${state.token}` } : {} });
+    if (!response.ok) throw new Error('Não foi possível carregar o áudio. Atualize sua sessão e tente novamente.');
+    const blob = await response.blob();
+    if (detailId !== monitoriaState.detailId) return;
+    if (monitoriaState.audioUrl) URL.revokeObjectURL(monitoriaState.audioUrl);
+    monitoriaState.audioUrl = URL.createObjectURL(blob); mon('Audio').src = monitoriaState.audioUrl;
+    mon('PlayPause').classList.remove('hidden-view'); button.classList.add('hidden-view');
+    mon('AudioStatus').textContent = 'Preparando áudio…';
+  } catch (error) {
+    if (detailId === monitoriaState.detailId) { mon('AudioStatus').textContent = error.message; throw error; }
+  } finally { if (detailId === monitoriaState.detailId) { button.disabled = false; button.textContent = '▶ Ouvir áudio'; } }
+}));
+const monitoriaBatchState = { files: [], requestId: null, current: '', company: '', timer: null, epoch: 0, signature: '', submitting: false, submission: 0 };
+const monitoriaUploadFields = [['ticket_id', 'Ticket', 'TicketId'], ['cliente', 'Cliente', 'Cliente'], ['tipo', 'Tipo de atendimento', 'Tipo'], ['area', 'Área', 'UploadCentral'], ['categoria', 'Categoria', 'UploadTeam'], ['operador_user_id', 'Operador (ID)', 'OperadorId'], ['analista_user_id', 'Analista (ID)', 'AnalistaId']];
+const monitoriaBatchStatus = (status) => ({ rejected: 'Não enviado', completed_with_errors: 'Finalizado com ocorrências' }[status] || monitoriaStatus(status));
+function stopMonitoriaBatchPolling() {
+  clearTimeout(monitoriaBatchState.timer); monitoriaBatchState.epoch += 1;
+}
+function monitoriaBatchIsVisible() {
+  return sessions.monitoriaSession?.classList.contains('active-session') && !mon('TabUpload').classList.contains('hidden-view');
+}
+function monitoriaBatchContext() { return `${state.companyId}:${state.profile?.user_id || 0}`; }
+function resetMonitoriaBatchContext(force = false) {
+  stopMonitoriaBatchPolling();
+  if (force || monitoriaBatchState.company !== monitoriaBatchContext()) {
+    monitoriaBatchState.company = force ? '' : monitoriaBatchContext();
+    monitoriaBatchState.submission += 1; monitoriaBatchState.submitting = false;
+    mon('UploadForm').querySelectorAll('input, select, button').forEach((control) => { control.disabled = false; });
+    mon('UploadMsg').textContent = ''; mon('BatchSelection').textContent = 'Selecione os áudios para revisar os metadados de cada arquivo.'; monitoriaBatchState.current = '';
+    monitoriaBatchState.files = []; monitoriaBatchState.requestId = null; monitoriaBatchState.signature = '';
+    mon('UploadForm').reset(); mon('BatchFiles').replaceChildren(); mon('BatchResults').replaceChildren();
+    mon('BatchSelect').replaceChildren(new Option('Nenhum lote enviado', ''));
+    mon('BatchStatus').textContent = ''; mon('BatchProgress').value = 0;
+  }
+}
+function renderMonitoriaBatchFiles() {
+  const opened = new Set([...mon('BatchFiles').querySelectorAll('[data-file-id]')].filter(el => el.querySelector('details')?.open).map(el => el.dataset.fileId));
+  const focused = document.activeElement?.closest('[data-batch-field]');
+  const focusId = focused?.closest('[data-file-id]')?.dataset.fileId, focusField = focused?.dataset.batchField;
+  mon('BatchFiles').innerHTML = monitoriaBatchState.files.map((entry, index) => {
+    const fields = monitoriaUploadFields.map(([key, label], fieldIndex) => {
+      if (['area', 'categoria'].includes(key)) {
+        const area = entry.values.area || mon('UploadCentral').value;
+        const options = key === 'area' ? monitoriaState.centrals : monitoriaState.teams.filter(c => c.central_id === area);
+        return `<label><span>${label}</span><select data-batch-field="${key}"><option value="">Usar padrão</option>${options.map(c => `<option value="${escapeHtml(c.id)}" ${entry.values[key] === c.id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}</select></label>`;
+      }
+      return `<label><span>${label}</span><input data-batch-field="${key}" type="${key.endsWith('_id') && key !== 'ticket_id' ? 'number' : 'text'}" ${key.endsWith('_id') && key !== 'ticket_id' ? 'min="1"' : `maxlength="${key === 'tipo' ? 100 : 200}"`} placeholder="Usar padrão" value="${escapeHtml(entry.values[key] || '')}" /></label>`; });
+    return `<article class="monitoria-batch-file" data-file-id="${entry.id}"><div class="monitoria-section-heading"><div><strong>${index + 1}. ${escapeHtml(entry.file.name)}</strong><span class="helper">${(entry.file.size / 1024 / 1024).toFixed(2)} MB${entry.file.size > 25 * 1024 * 1024 ? ' · Excede o limite por arquivo' : ''}${!entry.file.size ? ' · Arquivo vazio' : ''}</span></div><button type="button" class="secondary" data-remove-file="${entry.id}" aria-label="Remover ${escapeHtml(entry.file.name)}">Remover</button></div><div class="monitoria-upload-fields">${fields.slice(0, 3).join('')}</div><details ${opened.has(entry.id) ? 'open' : ''}><summary>Área, categoria e responsáveis deste arquivo</summary><div class="monitoria-upload-fields">${fields.slice(3).join('')}</div></details></article>`;
+  }).join('');
+  if (focusId && focusField) mon('BatchFiles').querySelector(`[data-file-id="${focusId}"] [data-batch-field="${focusField}"]`)?.focus();
+  const total = monitoriaBatchState.files.reduce((sum, entry) => sum + entry.file.size, 0);
+  mon('BatchSelection').textContent = `${monitoriaBatchState.files.length} arquivo(s) · ${(total / 1024 / 1024).toFixed(2)} MB selecionados${total > 200 * 1024 * 1024 ? ' · Remova arquivos para ficar abaixo de 200 MB' : ''}`;
+}
+mon('AudioFile').addEventListener('change', () => {
+  const files = [...mon('AudioFile').files];
+  monitoriaBatchState.requestId = null;
+  if (files.length > 20) {
+    mon('AudioFile').value = ''; monitoriaBatchState.files = []; renderMonitoriaBatchFiles();
+    mon('UploadMsg').textContent = 'Selecione no máximo 20 arquivos por lote.'; return;
+  }
+  monitoriaBatchState.files = files.map((file) => ({ file, id: crypto.randomUUID(), values: {} }));
+  mon('UploadMsg').textContent = ''; renderMonitoriaBatchFiles();
+});
+mon('BatchFiles').addEventListener('input', (event) => {
+  const input = event.target.closest('[data-batch-field]'); if (!input) return;
+  const entry = monitoriaBatchState.files.find((item) => item.id === input.closest('[data-file-id]').dataset.fileId);
+  if (entry) { entry.values[input.dataset.batchField] = input.value; if (input.dataset.batchField === 'area') { entry.values.categoria = ''; renderMonitoriaBatchFiles(); } }
+  monitoriaBatchState.requestId = null;
+});
+mon('BatchFiles').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-file]'); if (!button) return;
+  monitoriaBatchState.files = monitoriaBatchState.files.filter((entry) => entry.id !== button.dataset.removeFile);
+  if (!monitoriaBatchState.files.length) mon('AudioFile').value = '';
+  monitoriaBatchState.requestId = null; renderMonitoriaBatchFiles();
+});
+for (const [, , id] of monitoriaUploadFields) mon(id).addEventListener('input', () => { monitoriaBatchState.requestId = null; if (id === 'UploadCentral') { mon('UploadTeam').value = ''; renderMonitoriaBatchFiles(); } });
+function renderMonitoriaBatchResult(batch) {
+  const signature = JSON.stringify(batch);
+  if (signature === monitoriaBatchState.signature) return;
+  monitoriaBatchState.signature = signature;
+  const c = batch.counts, done = c.completed + c.failed + c.rejected;
+  mon('BatchProgress').max = batch.total || 1; mon('BatchProgress').value = done;
+  mon('BatchStatus').textContent = `${done}/${batch.total} finalizados · ${c.queued} na fila · ${c.processing} em análise · ${c.completed} concluídos · ${c.failed} falhas · ${c.rejected} não enviados`;
+  mon('BatchResults').innerHTML = batch.items.map((item) => `<li><div><strong>${escapeHtml(item.filename)}</strong><p class="meta">${escapeHtml([item.ticket_id, item.cliente].filter(Boolean).join(' · '))}</p><span class="badge">${escapeHtml(monitoriaBatchStatus(item.status))}${item.is_mock ? ' · simulado' : ''}</span>${item.error_message ? `<p class="monitoria-batch-error">${escapeHtml(item.error_message)}</p>` : ''}</div>${item.conversation_uuid ? `<button type="button" class="secondary" data-batch-conversation="${escapeHtml(item.conversation_uuid)}">Ver conversa</button>` : ''}</li>`).join('');
+}
+async function refreshMonitoriaBatches() {
+  stopMonitoriaBatchPolling();
+  if (!monitoriaBatchIsVisible()) return;
+  const epoch = monitoriaBatchState.epoch, company = state.companyId;
+  const valid = () => epoch === monitoriaBatchState.epoch && company === state.companyId && monitoriaBatchIsVisible();
+  try {
+    const data = await apiFetch(monitoriaCompanyPath('/lotes'));
+    if (!valid()) return;
+    const selected = monitoriaBatchState.current;
+    mon('BatchSelect').replaceChildren(...data.items.map((batch) => new Option(`${new Date(batch.created_at).toLocaleString('pt-BR')} · ${batch.total} arquivo(s) · ${monitoriaBatchStatus(batch.status)}`, batch.batch_id)));
+    if (!data.items.length) {
+      mon('BatchSelect').add(new Option('Nenhum lote enviado', '')); monitoriaBatchState.current = '';
+      mon('BatchStatus').textContent = 'Os envios confirmados aparecerão aqui, inclusive após recarregar a página.';
+      mon('BatchResults').replaceChildren(); mon('BatchProgress').value = 0; return;
+    }
+    // A selected older batch can still be opened by ID even after leaving the recent list.
+    const batch = data.items.find((item) => item.batch_id === selected) || (selected ? await apiFetch(monitoriaCompanyPath(`/lotes/${selected}`)) : data.items[0]);
+    if (!valid()) return;
+    if (![...mon('BatchSelect').options].some((option) => option.value === batch.batch_id)) mon('BatchSelect').add(new Option(`Lote anterior · ${batch.total} arquivo(s)`, batch.batch_id));
+    monitoriaBatchState.current = batch.batch_id; mon('BatchSelect').value = batch.batch_id;
+    renderMonitoriaBatchResult(batch);
+    if (data.items.some((item) => ['queued', 'processing'].includes(item.status)) || ['queued', 'processing'].includes(batch.status)) monitoriaBatchState.timer = setTimeout(refreshMonitoriaBatches, 2000);
+  } catch (error) {
+    if (!valid()) return;
+    mon('BatchStatus').textContent = `Não foi possível atualizar o lote. ${error.message} Nova tentativa em alguns segundos.`;
+    // Do not leave previously visible metadata on screen if access has changed.
+    mon('BatchResults').replaceChildren(); mon('BatchSelect').replaceChildren(new Option('Lotes indisponíveis', '')); mon('BatchProgress').value = 0; monitoriaBatchState.signature = '';
+    monitoriaBatchState.current = ''; monitoriaBatchState.timer = setTimeout(refreshMonitoriaBatches, 5000);
+  }
+}
+mon('BatchSelect').addEventListener('change', () => { monitoriaBatchState.current = mon('BatchSelect').value; monitoriaBatchState.signature = ''; refreshMonitoriaBatches(); });
+mon('RefreshBatches').addEventListener('click', refreshMonitoriaBatches);
+mon('BatchResults').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-batch-conversation]'); if (!button) return;
+  monitoriaRun(async () => { setMonitoriaTab('conversas'); await loadMonitoriaConversations(); await openMonitoriaConversation(button.dataset.batchConversation); });
+});
+mon('UploadForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (monitoriaBatchState.submitting) return;
+  monitoriaRun(async () => {
+    const entries = monitoriaBatchState.files;
+    if (!entries.length || entries.length > 20) throw new Error('Selecione de 1 a 20 arquivos.');
+    if (entries.reduce((sum, entry) => sum + entry.file.size, 0) > 200 * 1024 * 1024) throw new Error('O lote deve ter no máximo 200 MB.');
+    const payload = new FormData();
+    const metadata = entries.map((entry) => {
+      payload.append('files', entry.file);
+      return Object.fromEntries(monitoriaUploadFields.map(([key, , id]) => {
+        const value = entry.values[key] || mon(id).value;
+        return [key, key.endsWith('_id') && key !== 'ticket_id' ? (value ? Number(value) : null) : value];
+      }));
+    });
+    monitoriaBatchState.requestId ||= crypto.randomUUID();
+    payload.append('request_id', monitoriaBatchState.requestId); payload.append('metadata', JSON.stringify(metadata));
+    const company = state.companyId, context = monitoriaBatchContext(), submission = ++monitoriaBatchState.submission, url = monitoriaCompanyPath('/conversas/upload-lote');
+    monitoriaBatchState.submitting = true;
+    const controls = [...mon('UploadForm').querySelectorAll('input, select, button')];
+    controls.forEach((control) => { control.disabled = true; });
+    mon('UploadMsg').textContent = `Enviando ${entries.length} arquivo(s)… aguarde a confirmação antes de fechar a página.`;
+    try {
+      const batch = await apiFetch(url, { method: 'POST', body: payload });
+      if (company !== state.companyId || context !== monitoriaBatchContext() || submission !== monitoriaBatchState.submission) return;
+      monitoriaBatchState.current = batch.batch_id; monitoriaBatchState.signature = '';
+      renderMonitoriaBatchResult(batch);
+      mon('UploadMsg').textContent = `Lote recebido: ${batch.total - batch.counts.rejected} arquivo(s) aceito(s), ${batch.counts.rejected} não enviado(s). O processamento continua em segundo plano.`;
+      monitoriaBatchState.files = []; monitoriaBatchState.requestId = null;
+      mon('AudioFile').value = ''; renderMonitoriaBatchFiles();
+      await refreshMonitoriaBatches();
+      showToast('Lote recebido. Acompanhe cada arquivo em “Acompanhar envios”.');
+    } catch (error) {
+      if (company === state.companyId && context === monitoriaBatchContext() && submission === monitoriaBatchState.submission) {
+        mon('UploadMsg').textContent = `${error.message} Se o recebimento não foi confirmado, reenvie sem alterar os arquivos ou metadados para evitar duplicação.`;
+        throw error;
+      }
+    } finally {
+      if (submission === monitoriaBatchState.submission) { monitoriaBatchState.submitting = false; controls.forEach((control) => { control.disabled = false; }); }
+    }
+  });
+});
+function monitoriaForm(id, endpoint, payload, reload, method = 'POST') {
+  mon(id).addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget; monitoriaRun(async () => {
+    const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+    try { await apiFetch(monitoriaCompanyPath(endpoint), { method, body: JSON.stringify(payload()) }); if (method === 'POST') form.reset(); await reload(); showToast('Configuração salva.'); }
+    finally { button.disabled = false; }
+  }); });
+}
+monitoriaForm('PillarForm', '/pilares', () => ({ name: mon('PillarName').value, description: mon('PillarDescription').value, prompt: mon('PillarPrompt').value, weight: Number(mon('PillarWeight').value) }), loadMonitoriaPillars);
+monitoriaForm('SettingsForm', '/ai-settings', () => ({ ...(monitoriaState.runtime?.real_ai_enabled ? { provider: mon('Provider').value } : {}), is_enabled: mon('Enabled').value === 'true' }), async () => { const settings = await apiFetch(monitoriaCompanyPath('/ai-settings')); renderMonitoriaRuntime(settings.runtime); }, 'PUT');
+
 (async () => {
   await loadPlatformConfig();
   if (!canAccessPlatform()) {
@@ -4390,3 +5146,99 @@ window.__expaiMenu = {
   await loadUserSession(true);
   setPanel(true);
 })();
+
+mon('ClassifyForm').addEventListener('submit', event => {
+  event.preventDefault();
+  const uuid = monitoriaState.selectedUuid;
+  if (!uuid) return;
+  monitoriaRun(async () => {
+    await apiFetch(monitoriaCompanyPath(`/conversas/${uuid}/taxonomia`), { method: 'PATCH', body: JSON.stringify({ area: mon('ClassifyArea').value, categoria: mon('ClassifyCategory').value }) });
+    await loadMonitoriaConversations(); await openMonitoriaConversation(uuid); showToast('Classificação atualizada.');
+  });
+});
+
+// Platform backup is independent of the currently selected company/module.
+let backupBusy = false;
+let backupMaxBytes = 0;
+let backupAllowed = false;
+function setBackupStatus(message, error = false) {
+  const status = document.getElementById('backupStatus');
+  status.textContent = message;
+  status.className = error ? 'helper error' : 'helper';
+}
+function setBackupBusy(busy) {
+  backupBusy = busy;
+  document.getElementById('backupExportBtn').disabled = busy || !backupAllowed;
+  document.getElementById('backupRestoreBtn').disabled = busy || !backupAllowed;
+  document.getElementById('backupFile').disabled = busy;
+  document.getElementById('backupConfirmation').disabled = busy;
+  document.getElementById('backupSession').setAttribute('aria-busy', String(busy));
+}
+document.getElementById('backupMenuItem')?.addEventListener('click', async () => {
+  hideUserMenu();
+  if (backupBusy || state.profile?.can_manage_backup !== true) return;
+  showSession('backupSession');
+  backupAllowed = false;
+  setBackupBusy(true);
+  setBackupStatus('Verificando acesso ao backup...');
+  try {
+    const status = await apiFetch('/api/v1/admin/backup/status');
+    backupMaxBytes = status.max_bytes;
+    backupAllowed = true;
+    setBackupStatus(`Limite do arquivo: ${Math.round(backupMaxBytes / 1024 / 1024)} MB. Aguarde uploads e análises em andamento antes de iniciar.`);
+  } catch (error) {
+    setBackupStatus(error.message, true);
+  } finally {
+    setBackupBusy(false);
+  }
+});
+document.getElementById('backupExportBtn')?.addEventListener('click', async () => {
+  if (backupBusy || !backupAllowed) return;
+  setBackupBusy(true);
+  setBackupStatus('Gerando backup completo. Aguarde o início do download...');
+  try {
+    const blob = await apiFetch('/api/v1/admin/backup/export', { method: 'POST', responseType: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `expertise-ai-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setBackupStatus('Backup gerado. Confira o arquivo na pasta de downloads.');
+  } catch (error) {
+    setBackupStatus(error.message, true);
+  } finally {
+    setBackupBusy(false);
+  }
+});
+document.getElementById('backupRestoreForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (backupBusy || !backupAllowed) return;
+  const file = document.getElementById('backupFile').files[0];
+  const confirmation = document.getElementById('backupConfirmation').value;
+  if (!file || confirmation !== 'RESTAURAR') return;
+  if (file.size > backupMaxBytes) {
+    setBackupStatus(`O arquivo excede o limite de ${Math.round(backupMaxBytes / 1024 / 1024)} MB.`, true);
+    return;
+  }
+  const body = new FormData();
+  body.append('file', file);
+  body.append('confirmation', confirmation);
+  setBackupBusy(true);
+  setBackupStatus('Validando e restaurando o backup. Aguarde a conclusão antes de usar a plataforma.');
+  try {
+    await apiFetch('/api/v1/admin/backup/restore', { method: 'POST', body });
+    backupAllowed = false;
+    event.target.reset();
+    doLogout();
+    loginMsg.textContent = 'Restauração concluída. Entre com o usuário e a senha existentes no backup.';
+    loginMsg.className = 'helper';
+    showToast('Plataforma restaurada. Faça login novamente.');
+  } catch (error) {
+    setBackupStatus(error.message, true);
+  } finally {
+    setBackupBusy(false);
+  }
+});

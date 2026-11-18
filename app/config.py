@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("EXPAI_DATA_DIR", ROOT_DIR / "data"))
+BACKUP_MAX_BYTES = max(1, int(os.getenv("EXPAI_BACKUP_MAX_MB", "512"))) * 1024 * 1024
 DB_PATH = Path(os.getenv("EXPAI_DB_PATH", DATA_DIR / "system.sqlite3"))
 KB_ROOT = Path(os.getenv("EXPAI_KB_ROOT", DATA_DIR / "kb_store"))
 LOG_LEVEL = os.getenv("EXPAI_LOG_LEVEL", "INFO").strip().upper()
@@ -74,3 +75,11 @@ DEFAULT_ADMIN_EMAIL = os.getenv("EXPAI_DEFAULT_ADMIN_EMAIL", "admin@expertise.ai
 DEFAULT_ADMIN_PASSWORD = os.getenv("EXPAI_DEFAULT_ADMIN_PASSWORD", "Admin@123")
 SUPER_ADMIN_USER = os.getenv("EXPAI_SUPER_ADMIN_USER", "superadmin")
 SUPER_ADMIN_PASSWORD = os.getenv("EXPAI_SUPER_ADMIN_PASSWORD", "Admin@123")
+
+MONITORIA_ROOT = Path(os.getenv("EXPAI_MONITORIA_ROOT", DATA_DIR / "monitoria_store"))
+MONITORIA_REAL_AI_ENABLED = os.getenv("EXPAI_MONITORIA_REAL_AI_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
+AI_PROVIDER = os.getenv("EXPAI_AI_PROVIDER", "mock").strip().lower() or "mock"
+AI_DEFAULT_LANGUAGE = os.getenv("EXPAI_AI_DEFAULT_LANGUAGE", "pt").strip() or "pt"
+OPENAI_API_KEY = os.getenv("EXPAI_OPENAI_API_KEY", "").strip()
+ANTHROPIC_API_KEY = os.getenv("EXPAI_ANTHROPIC_API_KEY", "").strip()
+GROQ_API_KEY = os.getenv("EXPAI_GROQ_API_KEY", "").strip()

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,6 +9,18 @@
     <script defer src="/static/app.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#mainContent">Pular para o conteúdo</a>
+    <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="icon-book" viewBox="0 0 24 24"><path d="M12 6c-3-2-6-2-9-1v14c3-1 6-1 9 1 3-2 6-2 9-1V5c-3-1-6-1-9 1Zm0 0v14"/></symbol>
+      <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+      <symbol id="icon-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h8M8 16h6"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="icon-edit" viewBox="0 0 24 24"><path d="m15 5 4 4M4 20l5-1L20 8a2.8 2.8 0 0 0-4-4L5 15l-1 5Z"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></symbol>
+    </svg>
     <div class="page-shell">
       <div id="importProgressOverlay" class="import-overlay hidden-view" aria-live="polite" role="status" aria-label="Processando importação do documento">
         <div class="import-overlay__backdrop"></div>
@@ -26,15 +38,16 @@
 
       <header class="topbar">
         <div class="brand-wrap">
-          <span class="brand-mark">AI</span>
+          <span class="brand-mark" aria-hidden="true"><svg class="ui-icon"><use href="#icon-book"/></svg></span>
           <div id="brandHomeLink" role="button" tabindex="0" aria-label="Ir para o início">
-            <h1>Expertise.AI</h1>
+            <h1>Expertise<span class="brand-accent">.AI</span></h1>
             <p class="subtitle" id="brandSubtitle">Base de Conhecimento por Expertise Operacional</p>
           </div>
         </div>
-        <nav class="workspace-nav" id="workspaceNav">
-          <button class="menu-item" data-session="dashboardSession">Início</button>
-          <button class="menu-item" data-session="taxonomySession">Estrutura</button>
+        <nav class="workspace-nav" id="workspaceNav" aria-label="Navegação principal">
+          <button class="menu-item" data-session="dashboardSession"><svg class="ui-icon" aria-hidden="true"><use href="#icon-book"/></svg>Base de Conhecimento</button>
+          <button class="menu-item" data-session="taxonomySession"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"/></svg>Estrutura</button>
+          <button class="menu-item" data-session="monitoriaSession"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"/></svg>Monitoria</button>
         </nav>
         <div class="topbar-tools">
           <div class="status-chip" id="statusChip">sem autenticação</div>
@@ -46,47 +59,69 @@
               <button type="button" id="userProfileMenuItem" class="user-menu__item" role="menuitem" data-session="profileSession">Perfil</button>
               <button type="button" id="userAdminMenuItem" class="user-menu__item hidden-view" role="menuitem" data-session="userAdminSession">Usuários</button>
               <button type="button" id="userAreaAccessMenuItem" class="user-menu__item hidden-view" role="menuitem" data-session="userAreaAccessSession">Áreas</button>
+              <button type="button" id="backupMenuItem" class="user-menu__item hidden-view" role="menuitem" data-session="backupSession">Backup e restauração</button>
               <button type="button" id="userLogoutMenuItem" class="user-menu__item user-menu__item--danger" role="menuitem">Sair</button>
             </div>
           </div>
         </div>
       </header>
 
-      <main class="content-area">
+      <main class="content-area" id="mainContent" tabindex="-1">
         <section class="panel login-panel active" id="loginPanel">
           <article class="hero-copy">
-            <h2>Entrada rápida</h2>
-            <p>
-              Acesse em minutos suas bases por empresa, visualize documentos publicados,
-              crie versões e mantenha o padrão de conhecimento da sua organização.
-            </p>
+            <span class="eyebrow">CONHECIMENTO QUE CONECTA</span>
+            <h2>Conhecimento organizado.<br /><em>Equipes alinhadas.</em></h2>
+            <p>Um lugar para o que sua equipe sabe. Organize processos, encontre respostas e compartilhe conhecimento com confiança.</p>
+            <div class="knowledge-flow" aria-label="Jornada do conhecimento">
+              <div class="knowledge-flow__item"><span class="feature-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-file"/></svg></span><div><strong>Organize o essencial</strong><span>Documentos, áreas e categorias em um só lugar.</span></div></div>
+              <div class="knowledge-flow__item"><span class="feature-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-check"/></svg></span><div><strong>Publique com confiança</strong><span>Versões e aprovações para manter tudo em dia.</span></div></div>
+              <div class="knowledge-flow__item"><span class="feature-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-search"/></svg></span><div><strong>Encontre e compartilhe</strong><span>Conhecimento acessível a pessoas e agentes de IA.</span></div></div>
+            </div>
           </article>
 
           <form class="form-card" id="loginForm">
-            <h3>Entrar</h3>
+            <span class="eyebrow">SEU ESPAÇO DE TRABALHO</span>
+            <h3>Bem-vindo de volta.</h3>
+            <p class="form-intro">Entre para acessar o conhecimento da sua equipe.</p>
             <label>
-              <span>E-mail</span>
-              <input required type="email" id="email" placeholder="admin@empresa.com" />
+              <span>E-mail de acesso</span>
+              <input required type="email" id="email" placeholder="voce@empresa.com" autocomplete="username" />
             </label>
             <label>
               <span>Senha</span>
-              <input required type="password" id="password" placeholder="••••••••" />
+              <input required type="password" id="password" placeholder="Digite sua senha" autocomplete="current-password" />
             </label>
-            <button type="submit">Acessar área de conhecimento</button>
-            <p class="helper" id="loginMsg"></p>
+            <button type="submit">Entrar na plataforma <svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
+            <p class="helper" id="loginMsg" role="status"></p>
+            <p class="login-note">Precisa de acesso? Fale com o administrador da sua empresa.</p>
           </form>
         </section>
 
         <section class="panel dashboard-panel" id="dashboardPanel">
           <section class="session panel-card active-session" id="dashboardSession">
             <section class="toolbar panel-row">
+              <div class="page-heading">
+                <span class="eyebrow">ESPAÇO DE TRABALHO</span>
+                <h2>Sua base de conhecimento</h2>
+                <p>Encontre respostas. Compartilhe o que sua equipe sabe.</p>
+              </div>
               <div class="panel-actions">
-                <button id="refreshDocs">Publicar novo documento</button>
+                <button id="refreshDocs"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg>Novo documento</button>
               </div>
             </section>
 
+            <section class="library-panel" aria-label="Biblioteca de documentos">
+            <div class="library-heading">
+              <div><h3>Biblioteca <span id="docsCount" class="count-badge" aria-live="polite">—</span></h3><p>O conhecimento da sua organização, sempre à mão.</p></div>
+              <label class="search-field">
+                <span class="sr-only">Buscar documentos</span>
+                <svg class="ui-icon" aria-hidden="true"><use href="#icon-search"/></svg>
+                <input type="search" id="filterBusca" placeholder="Buscar documentos..." />
+              </label>
+            </div>
             <section class="filters panel-compact">
               <label>
+                <span>Área</span>
                 <div class="sort-control__field">
                   <select id="filterArea">
                     <option value="">Todas as áreas</option>
@@ -95,6 +130,7 @@
                 </div>
               </label>
               <label>
+                <span>Categoria</span>
                 <div class="sort-control__field">
                   <select id="filterCategoria">
                     <option value="">Todas as categorias</option>
@@ -103,6 +139,7 @@
                 </div>
               </label>
               <label class="sort-control">
+                <span>Ordenar por</span>
                 <div class="sort-control__field">
                   <select id="sortDocs">
                     <option value="created_desc">Criação mais recente</option>
@@ -116,26 +153,26 @@
                 </div>
               </label>
               <label>
-                <input type="text" id="filterTag" placeholder="Tag" />
+                <span>Tag</span>
+                <input type="text" id="filterTag" placeholder="Filtrar por tag" />
               </label>
-              <label>
-                <input type="text" id="filterBusca" placeholder="Busca palavra" />
-              </label>
+              <button id="clearDocFilters" type="button" class="ghost filter-reset">Limpar filtros</button>
             </section>
 
             <section class="actions-grid">
-              <article class="action-card">
-                <h3>Documentos</h3>
-                <ul id="docsList" class="items-list"></ul>
+              <article class="action-card documents-card" aria-label="Documentos">
+                <div id="kbStatusAlert" class="kb-status-alert hidden-view" role="status" aria-live="polite"></div>
+                <ul id="docsList" class="items-list" aria-label="Lista de documentos"></ul>
               </article>
             </section>
 
             <section class="pager-row">
-              <span id="docsPagerInfo" class="pager-info" aria-live="polite">Página 1 de 1 — 1 a 6 de 6 documento(s)</span>
+              <span id="docsPagerInfo" class="pager-info" aria-live="polite">Carregando documentos...</span>
               <div class="pager-controls">
                 <button id="docsPrev" type="button">← Anterior</button>
                 <button id="docsNext" type="button">Próxima →</button>
               </div>
+            </section>
             </section>
           </section>
 
@@ -163,6 +200,7 @@
                       <span>Nova área</span>
                       <input form="addAreaForm" required id="areaInput" placeholder="suporte" />
                     </label>
+                    <button class="taxonomy-mobile-action" type="submit" form="addAreaForm">Adicionar área</button>
                   </div>
                   <div class="taxonomy-group taxonomy-group--categorias">
                     <label class="taxonomy-field taxonomy-field--categoria-area">
@@ -178,6 +216,7 @@
                       <span>Nova categoria</span>
                       <input form="addCategoriaForm" required id="categoriaInput" placeholder="processos" />
                     </label>
+                    <button class="taxonomy-mobile-action" type="submit" form="addCategoriaForm">Adicionar categoria</button>
                   </div>
                 </div>
                 <div class="taxonomy-actions-row">
@@ -201,6 +240,216 @@
                 </section>
               </div>
               <p class="helper" id="taxonomyMsg"></p>
+            </article>
+          </section>
+
+          <section class="session panel-card" id="monitoriaSession">
+            <article class="action-card monitoria-shell">
+              <div class="library-heading">
+                <div>
+                  <p class="monitoria-eyebrow">EXPERTISE.AI / MONITORIA</p><h3>Qualidade em cada conversa</h3>
+                  <p class="helper">Entenda o atendimento, acompanhe os pilares e encontre oportunidades de evolução.</p>
+                </div>
+              </div>
+              <div class="monitoria-mock-notice"><strong id="monitoriaModeLabel">Modo simulado</strong><span id="monitoriaModeDescription">Transcrições e notas são fictícias, inclusive para áudios enviados. Nenhuma IA externa é chamada. Os áudios de exemplo contêm silêncio.</span><button type="button" id="monitoriaCreateDemoBtn" class="secondary" data-monitoria-admin>Carregar demonstração</button></div>
+              <p id="monitoriaScopeLabel" class="helper"></p>
+              <nav class="monitoria-tabs" aria-label="Seções de monitoria">
+                <button type="button" class="monitoria-tab active" data-monitoria-tab="conversas">Conversas</button>
+                <button type="button" class="monitoria-tab" data-monitoria-write data-monitoria-tab="upload">Upload</button>
+                <button type="button" class="monitoria-tab" data-monitoria-tab="pilares">Pilares</button>
+                <button type="button" class="monitoria-tab" data-monitoria-tab="org">Áreas e categorias</button>
+                <button type="button" class="monitoria-tab" data-monitoria-admin data-monitoria-tab="config">Provedores</button>
+              </nav>
+
+              <div id="monitoriaTabConversas" class="monitoria-tab-panel">
+                <div id="monitoriaMetrics" class="monitoria-metrics" aria-live="polite"></div>
+                <details id="monitoriaFiltersPanel" class="monitoria-filter-panel"><summary>Filtrar conversas <span id="monitoriaFilterCount">Todos os atendimentos</span></summary>
+                <div class="filters monitoria-filters">
+                  <label>
+                    <span>Área</span>
+                    <select id="monitoriaFilterCentral"><option value="">Todas</option></select>
+                  </label>
+                  <label>
+                    <span>Cliente</span>
+                    <input id="monitoriaFilterCliente" placeholder="Cliente" />
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select id="monitoriaFilterStatus">
+                      <option value="">Todos</option>
+                      <option value="queued">Na fila</option>
+                      <option value="processing">Em análise</option>
+                      <option value="completed">Concluída</option>
+                      <option value="failed">Falhou</option>
+                    </select>
+                  </label>
+                  <label><span>Categoria</span><select id="monitoriaFilterTeam"><option value="">Todas</option></select></label>
+                  <label><span>Pilar / versão</span><select id="monitoriaFilterPillar"><option value="">Todos</option></select></label>
+                  <label><span>Tipo de atendimento</span><input id="monitoriaFilterTipo" placeholder="Ex.: Cobrança" /></label>
+                  <label><span>Operador (ID)</span><input id="monitoriaFilterOperador" type="number" min="1" placeholder="Todos" /></label>
+                  <label><span>Analista (ID)</span><input id="monitoriaFilterAnalista" type="number" min="1" placeholder="Todos" /></label>
+                  <div class="form-actions"><button type="button" id="monitoriaClearFilters" class="secondary">Limpar</button><button type="button" id="monitoriaRefreshList" class="secondary">Atualizar</button></div>
+                </div>
+                </details>
+                <div id="monitoriaEmptyState" class="monitoria-empty-state hidden-view">
+                  <h4>Nenhuma conversa ainda</h4>
+                  <p class="helper">Envie um áudio com o metadado do ticket ou use “Carregar demonstração” para ver a transcrição, os scores e a telemetria.</p>
+                  <div class="form-actions">
+
+                    <button type="button" data-monitoria-write id="monitoriaGoUploadBtn" class="secondary">Ir para upload</button>
+                  </div>
+                </div>
+                <div class="monitoria-master-detail">
+                  <div class="monitoria-list-pane"><h4 class="monitoria-list-heading">Atendimentos <span>Selecione para revisar</span></h4>
+                    <ul id="monitoriaConversasList" class="items-list">Carregando...</ul>
+                    <div class="pager-row">
+                      <button type="button" id="monitoriaPrevPage" class="secondary">Anterior</button>
+                      <span id="monitoriaPagerInfo" class="helper">—</span>
+                      <button type="button" id="monitoriaNextPage" class="secondary">Próxima</button>
+                    </div>
+                  </div>
+                  <div class="monitoria-detail-pane">
+                      <button type="button" id="monitoriaBackToList" class="secondary monitoria-back">← Voltar aos atendimentos</button>
+
+                    <div id="monitoriaDetailEmpty" class="helper">Selecione uma conversa para ver a transcrição e a telemetria.</div>
+                    <div id="monitoriaDetailContent" class="hidden-view">
+                      <header class="monitoria-detail-header">
+                        <div><p class="monitoria-eyebrow">REVISÃO DO ATENDIMENTO</p><h4 id="monitoriaDetailTitle" tabindex="-1">Conversa</h4><p id="monitoriaDetailMeta" class="meta"></p></div>
+                        <div class="monitoria-overall"><strong id="monitoriaOverallScore">—</strong><span>nota / 100</span></div>
+                      </header>
+                      <div class="monitoria-player" role="group" aria-label="Reprodução do atendimento">
+                        <div class="monitoria-player-controls">
+                          <button type="button" id="monitoriaLoadAudio">▶ Ouvir áudio</button>
+                          <button type="button" id="monitoriaPlayPause" class="hidden-view" aria-label="Reproduzir áudio">▶ Reproduzir</button>
+                          <button type="button" id="monitoriaRewind" class="secondary" aria-label="Voltar 10 segundos">↶ 10s</button>
+                          <output id="monitoriaPlaybackTime" class="monitoria-time" aria-live="off">00:00 / 00:00</output>
+                          <label class="monitoria-speed"><span class="sr-only">Velocidade de reprodução</span><select id="monitoriaSpeed" aria-label="Velocidade de reprodução"><option value="1">1×</option><option value="1.25">1,25×</option><option value="1.5">1,5×</option><option value="2">2×</option></select></label>
+                        </div>
+                        <input id="monitoriaSeek" type="range" min="0" max="1" step="0.1" value="0" aria-label="Posição na conversa" />
+                        <audio id="monitoriaAudio" preload="none" hidden></audio>
+                        <p id="monitoriaAudioStatus" class="helper" role="status">Carregue o áudio para ouvir. Você já pode explorar as falas e notas.</p>
+                      </div>
+                      <form id="monitoriaClassifyForm" data-monitoria-admin class="vertical-form"><details><summary>Classificação da conversa</summary><p class="helper">Escolha uma área existente para disponibilizar a conversa às pessoas com acesso a ela. As avaliações são preservadas.</p><label><span>Área</span><select id="monitoriaClassifyArea" required></select></label><label><span>Categoria</span><select id="monitoriaClassifyCategory"></select></label><button type="submit">Salvar classificação</button></details></form><p id="monitoriaDetailStatus" class="helper" role="status"></p>
+                      <section class="monitoria-telemetry" aria-labelledby="monitoriaTimelineTitle">
+                        <div class="monitoria-section-heading"><div><h4 id="monitoriaTimelineTitle">Linha do tempo</h4><p class="helper">Cada faixa revela um pilar. Selecione um trecho para ver a evidência.</p></div><label class="monitoria-zoom">Zoom <select id="monitoriaZoom"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div>
+                        <div class="monitoria-legend"><span>Notas simuladas / 100</span><span class="legend-good">80–100</span><span class="legend-medium">65–&lt;80</span><span class="legend-low">0–&lt;65 · Atenção</span></div>
+                        <p class="helper monitoria-timeline-hint">Deslize a timeline para explorar os trechos. Use o zoom para ampliar.</p>
+                        <div id="monitoriaTelemetryList" class="monitoria-timeline" tabindex="0" role="region" aria-label="Linha do tempo por pilar; role horizontalmente para explorar"></div>
+                        <p id="monitoriaEvidence" class="monitoria-evidence" aria-live="polite">Selecione uma nota para explorar a avaliação simulada.</p>
+                      </section>
+                      <div class="monitoria-section-heading monitoria-transcript-heading"><h4>Conversa</h4><label class="monitoria-follow"><input id="monitoriaFollow" type="checkbox" checked /> Acompanhar reprodução</label></div>
+                      <div id="monitoriaChat" class="monitoria-chat" tabindex="0" role="region" aria-label="Transcrição da conversa"></div>
+                      <section class="monitoria-summary-section"><h4>Resultado por pilar</h4><div id="monitoriaPillarSummary" class="monitoria-pillar-summary"></div><details class="monitoria-evidence"><summary>Critérios usados nesta avaliação</summary><div id="monitoriaCriteriaSnapshot"></div></details></section>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="monitoriaTabUpload" class="monitoria-tab-panel hidden-view">
+                <form id="monitoriaUploadForm" class="vertical-form">
+                  <label>
+                    <span>Arquivos de áudio</span>
+                    <input required multiple type="file" id="monitoriaAudioFile" accept="audio/*,.wav,.mp3,.ogg,.m4a,.flac,.webm,.aac" />
+                    <span class="helper">Até 20 arquivos · 25 MB por áudio · 200 MB por lote</span>
+                  </label>
+                  <details class="monitoria-upload-defaults"><summary>Valores padrão para o lote</summary><p class="helper">Campos vazios em cada arquivo herdam estes valores. Você pode ajustar os metadados antes de enviar.</p><div class="monitoria-upload-fields">
+                  <label>
+                    <span>Ticket</span>
+                    <input id="monitoriaTicketId" placeholder="ID do ticket" />
+                  </label>
+                  <label>
+                    <span>Cliente</span>
+                    <input id="monitoriaCliente" placeholder="Nome do cliente" />
+                  </label>
+                  <label>
+                    <span>Área</span>
+                    <select id="monitoriaUploadCentral"><option value="">Opcional</option></select>
+                  </label>
+                  <label>
+                    <span>Operador (ID de usuário)</span>
+                    <input id="monitoriaOperadorId" type="number" min="1" placeholder="ID do operador" />
+                  </label>
+                  <label><span>Categoria</span><select id="monitoriaUploadTeam"><option value="">Opcional</option></select></label>
+                  <label><span>Analista responsável (ID)</span><input id="monitoriaAnalistaId" type="number" min="1" /></label>
+                  <label><span>Tipo de atendimento</span><input id="monitoriaTipo" placeholder="Ex.: Suporte" /></label>
+                  </div></details>
+                  <div id="monitoriaBatchFiles" class="monitoria-batch-files"></div>
+                  <p class="helper" id="monitoriaBatchSelection" role="status">Selecione os áudios para revisar os metadados de cada arquivo.</p>
+                  <p class="helper">Após a confirmação do recebimento, o processamento continua no servidor e você pode sair desta página. A flag de IA real define se as análises serão simuladas.</p>
+                  <div class="form-actions">
+                    <button type="submit">Enviar lote para processamento</button>
+                  </div>
+                  <p class="helper" id="monitoriaUploadMsg" role="status"></p>
+                </form>
+                <section class="monitoria-batch-tracker" aria-labelledby="monitoriaBatchHeading">
+                  <div class="monitoria-section-heading"><div><h4 id="monitoriaBatchHeading">Acompanhar envios</h4><p class="helper">Lotes recentes no seu escopo. O andamento é atualizado automaticamente enquanto esta aba está aberta.</p></div><button type="button" id="monitoriaRefreshBatches" class="secondary">Atualizar</button></div>
+                  <label class="monitoria-batch-select"><span>Lote</span><select id="monitoriaBatchSelect"><option value="">Nenhum lote enviado</option></select></label>
+                  <p id="monitoriaBatchStatus" class="helper" role="status"></p>
+                  <progress id="monitoriaBatchProgress" max="1" value="0" aria-label="Itens finalizados no lote"></progress>
+                  <ul id="monitoriaBatchResults" class="monitoria-batch-results"></ul>
+                </section>
+              </div>
+
+              <div id="monitoriaTabPilares" class="monitoria-tab-panel hidden-view">
+                <p class="helper">Cada pilar define um agente especialista. Salvar novamente o mesmo nome cria uma nova versão para análises futuras. As notas anteriores são preservadas.</p>
+                <form data-monitoria-admin id="monitoriaPillarForm" class="vertical-form">
+                  <label>
+                    <span>Nome do pilar</span>
+                    <input required id="monitoriaPillarName" placeholder="Empatia" />
+                  </label>
+                  <label>
+                    <span>Descrição</span>
+                    <input id="monitoriaPillarDescription" placeholder="O que este agente avalia" />
+                  </label>
+                  <label>
+                    <span>Prompt do agente</span>
+                    <textarea id="monitoriaPillarPrompt" rows="3" placeholder="Instruções para a IA especialista"></textarea>
+                  </label>
+                  <label>
+                    <span>Peso</span>
+                    <input id="monitoriaPillarWeight" type="number" min="0.1" step="0.1" value="1" />
+                  </label>
+                  <div class="form-actions">
+                    <button type="submit">Salvar pilar</button>
+                  </div>
+                </form>
+                <ul id="monitoriaPillarsList" class="items-list"></ul>
+              </div>
+
+              <div id="monitoriaTabOrg" class="monitoria-tab-panel hidden-view">
+                <p class="helper">A Monitoria utiliza as áreas e categorias já cadastradas na Gestão de Conteúdo. Permissões de módulo e restrições por área são definidas em Gestão de Acessos.</p>
+                <h4>Áreas disponíveis</h4><ul id="monitoriaCentralsList" class="items-list"></ul>
+                <h4>Categorias por área</h4><ul id="monitoriaTeamsList" class="items-list"></ul>
+              </div>
+
+              <div id="monitoriaTabConfig" class="monitoria-tab-panel hidden-view">
+                <h4>Provedor da empresa</h4>
+                <p id="monitoriaRuntimeStatus" class="helper" role="status"></p><p class="helper">A flag de IA real é definida no servidor. Desativada, as novas análises usam apenas mocks. Ativada, uploads exigem um provedor real implementado. A demonstração permanece explicitamente simulada.</p>
+                <form id="monitoriaSettingsForm" class="vertical-form">
+                  <label><span>Provedor</span><select id="monitoriaProvider"><option value="mock">Mock — simulação local</option><option value="openai" disabled>OpenAI — integração futura</option><option value="anthropic" disabled>Anthropic / Claude — integração futura</option><option value="claude" disabled>Claude — alias de Anthropic</option><option value="groq" disabled>Groq — integração futura</option></select></label>
+                  <label><span>Processamento</span><select id="monitoriaEnabled"><option value="true">Habilitado</option><option value="false">Pausado</option></select></label>
+                  <button type="submit">Salvar configuração</button>
+                </form>
+              </div>
+              <p class="helper" id="monitoriaMsg" role="status"></p>
+            </article>
+          </section>
+
+          <section class="session panel-card" id="backupSession" aria-labelledby="backupTitle">
+            <article class="action-card">
+              <h3 id="backupTitle">Backup e restauração da plataforma</h3>
+              <p class="helper">Inclui todas as empresas, usuários, permissões, documentos, anexos e dados da Monitoria, inclusive áudios. Acesso exclusivo a administradores de todas as empresas.</p>
+              <p class="helper">O arquivo contém dados confidenciais e hashes de senhas. Guarde-o em local protegido. Configurações do servidor, como o arquivo .env e chaves de integração, são mantidas separadamente.</p>
+              <button type="button" id="backupExportBtn" disabled>Baixar backup JSON</button>
+              <hr />
+              <h4>Restaurar um backup</h4>
+              <p class="helper">A restauração substitui todos os dados atuais pelo conteúdo do arquivo, inclusive usuários e senhas. Baixe um backup atual antes de continuar. Ao concluir, todos precisarão entrar novamente com as credenciais do backup.</p>
+              <form id="backupRestoreForm" class="vertical-form">
+                <label><span>Arquivo de backup JSON</span><input type="file" id="backupFile" accept=".json,application/json" required /></label>
+                <label><span>Digite RESTAURAR para confirmar a substituição</span><input id="backupConfirmation" autocomplete="off" spellcheck="false" pattern="RESTAURAR" required /></label>
+                <button type="submit" id="backupRestoreBtn" class="button-danger" disabled>Restaurar plataforma</button>
+              </form>
+              <p id="backupStatus" class="helper" role="status" aria-live="polite"></p>
             </article>
           </section>
 
@@ -230,6 +479,7 @@
                     <option value="aprovador">aprovador</option>
                   </select>
                 </label>
+<fieldset><legend>Módulos permitidos</legend><div class="area-access-grid" id="newUserModules"><label><input type="checkbox" value="conteudo" checked /> Gestão de Conteúdo</label><label><input type="checkbox" value="monitoria" /> Monitoria</label></div></fieldset><label><span>Perfil na Monitoria</span><select id="newUserMonitoriaRole"><option value="monitoria_analista">Analista</option><option value="monitoria_supervisor">Supervisor</option><option value="monitoria_operador">Operador</option><option value="monitoria_admin">Administrador da Monitoria</option></select><small class="helper">As restrições de áreas existentes também se aplicam à Monitoria. Administradores da plataforma têm acesso completo dentro dos módulos habilitados.</small></label>
                 <label>
                   <span>Perfis de restrição</span>
                   <div class="sort-control__field multi-combobox">
@@ -245,7 +495,7 @@
               </form>
               <p class="helper" id="userAdminMsg"></p>
 
-              <section class="action-card-grid" style="margin-top: 12px;">
+              <section class="action-card-grid stack-sm">
                 <div>
                   <div class="user-admin-toolbar">
                     <h4>Acessos por usuário</h4>
@@ -341,7 +591,7 @@
                 <p class="helper" id="areaAccessMsg"></p>
               </div>
             </article>
-            <article class="action-card" style="margin-top: 12px;">
+            <article class="action-card stack-sm">
               <h3>Perfis reutilizáveis de restrição</h3>
               <form id="createAreaRestrictionProfileForm" class="vertical-form">
                 <label>
@@ -363,8 +613,10 @@
           </section>
 
           <section class="session panel-card" id="createSession">
+            <button type="button" id="backToDocuments" class="ghost back-button">← Voltar para documentos</button>
             <article class="action-card">
-              <h3>Novo documento</h3>
+              <h3 id="documentFormTitle">Novo documento</h3>
+              <p class="form-intro">Adicione um título e importe um arquivo ou escreva o conteúdo abaixo.</p>
               <form id="createDocForm" class="vertical-form">
                 <label>
                   <span>Área</span>
@@ -389,19 +641,20 @@
                   <input type="date" id="docValidity" />
                 </label>
                 <label>
-                  <span>Slug</span>
+                  <span>Identificador do documento</span>
                   <input id="docSlug" placeholder="onboarding-primeiro-usuario" />
+                  <small class="helper">Gerado a partir do título. Você pode personalizá-lo.</small>
                 </label>
                 <label>
                   <span>Tags (separadas por vírgula)</span>
                   <div class="tag-editor">
-                    <div id="docTagBadges" class="tag-badge-row" aria-live="polite" aria-label="Tags adicionadas"></div>
+                    <div id="docTagBadges" class="tag-badge-row" role="group" aria-live="polite" aria-label="Tags adicionadas"></div>
                     <input id="docTags" placeholder="Digite uma tag e pressione vírgula para adicionar" autocomplete="off" />
                   </div>
                   <small class="helper">Digite o texto da tag e use vírgula (,) para criar um badge.</small>
                 </label>
                 <label>
-                  <span>Prompt AI</span>
+                  <span>Orientações para IA <small>(opcional)</small></span>
                   <textarea id="docAiPrompt" rows="3" placeholder="Sugestão de apoio ao prompt de IA, para auxilio nos Agents AI."></textarea>
                   <small class="helper">Sugestão de apoio ao prompt de IA, para auxilio nos Agents AI.</small>
                 </label>
@@ -422,8 +675,8 @@
                   <input type="checkbox" id="docPublish" />
                   <span>Publicar versão após salvar</span>
                 </label>
-                <button type="submit">Salvar documento</button>
-                <p class="helper" id="createMsg"></p>
+                <div class="form-actions"><button type="button" id="cancelDocument" class="ghost">Cancelar</button><button type="submit">Salvar documento</button></div>
+                <p class="helper" id="createMsg" role="status"></p>
               </form>
             </article>
 
@@ -444,7 +697,7 @@
                 <div class="publish-toggle-row">
                   <span class="helper" id="publishToggleInfo">Publicar esta versão</span>
                   <label class="onoff-switch">
-                    <input type="checkbox" id="versionPublishToggle" />
+                    <input type="checkbox" id="versionPublishToggle" aria-label="Publicar versão selecionada" />
                     <span class="onoff-slider"></span>
                   </label>
                 </div>
@@ -481,6 +734,7 @@
       </main>
 
       <footer class="platform-footer">
+        <span class="platform-footer__label">Expertise.AI <span>· Conhecimento que conecta.</span></span>
         <a
           class="platform-footer__api-docs platform-footer__github"
           href="/docs"
@@ -488,12 +742,7 @@
           rel="noreferrer"
           aria-label="Abrir documentação da API (Swagger/OpenAPI)"
         >
-          <img
-            class="platform-footer__icon"
-            src="https://cdn.simpleicons.org/swagger/2f2a26"
-            alt=""
-            aria-hidden="true"
-          />
+          <svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg>
         </a>
         <a
           class="platform-footer__github"
@@ -527,7 +776,7 @@
               <div id="modalPublishToggleWrap" class="publish-toggle-row">
                 <span class="helper" id="modalPublishToggleInfo">Publicar esta versão</span>
                 <label class="onoff-switch">
-                  <input type="checkbox" id="modalVersionPublishToggle" />
+                  <input type="checkbox" id="modalVersionPublishToggle" aria-label="Publicar esta versão" />
                   <span class="onoff-slider"></span>
                 </label>
               </div>
@@ -559,6 +808,7 @@
               <span>Perfis</span>
               <div id="userAccessModalRoles" class="area-access-grid"></div>
             </label>
+<fieldset><legend>Módulos permitidos</legend><div class="area-access-grid" id="userAccessModalModules"><label><input type="checkbox" value="conteudo" checked /> Gestão de Conteúdo</label><label><input type="checkbox" value="monitoria" /> Monitoria</label></div></fieldset><label><span>Perfil na Monitoria</span><select id="userAccessModalMonitoriaRole"><option value="monitoria_analista">Analista</option><option value="monitoria_supervisor">Supervisor</option><option value="monitoria_operador">Operador</option><option value="monitoria_admin">Administrador da Monitoria</option></select><small class="helper">As restrições de áreas existentes também se aplicam à Monitoria. Administradores da plataforma têm acesso completo dentro dos módulos habilitados.</small></label>
             <label>
               <span>Perfis de restrição</span>
               <div class="sort-control__field multi-combobox">
@@ -581,7 +831,7 @@
             </div>
             <div class="doc-modal__footer-row">
               <button type="button" id="userAccessModalOpenAreas" class="ghost">Gerenciar regras de restrição</button>
-              <button type="button" id="userAccessModalRevoke" class="ghost">Revogar acesso</button>
+              <button type="button" id="userAccessModalRevoke" class="ghost button-danger">Revogar acesso</button>
               <button type="button" id="userAccessModalSave">Salvar</button>
             </div>
             <p class="helper" id="userAccessModalMsg"></p>
