@@ -1,4 +1,6 @@
 import asyncio
+import time
+import threading
 import json
 from pathlib import Path
 import shutil
@@ -10,13 +12,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app import backup_routes, backup_services as backup, config, db, kb_routes, maintenance, monitoria_services, security, services
+from app import backup_jobs, backup_routes, backup_services as backup, config, db, kb_routes, maintenance, monitoria_services, security, services
 from test_monitoria import isolated_monitoria  # noqa: F401
 
 
 @pytest.fixture()
 def backup_context(isolated_monitoria, monkeypatch):
     ctx = isolated_monitoria
+    monkeypatch.setattr(backup_jobs, 'WAIT_SECONDS', 2)
     monkeypatch.setattr(kb_routes, '_UPLOAD_JOBS_DIR', ctx['data_dir'] / '_upload_jobs')
     monkeypatch.setattr(config, 'ACCESS_CONTROL_ENABLED', True)
     app = FastAPI()
@@ -28,6 +31,10 @@ def backup_context(isolated_monitoria, monkeypatch):
     with TestClient(app) as client:
         ctx['client'] = client
         yield ctx
+    for worker in threading.enumerate():
+        if worker.name.startswith("backup-"):
+            worker.join(timeout=5)
+            assert not worker.is_alive()
     services.clear_storage_caches()
     kb_routes._UPLOAD_JOBS.clear()
 
@@ -41,8 +48,25 @@ def headers(ctx, user='admin_id'):
     return {'Authorization': 'Bearer ' + token(ctx, user)}
 
 
+def wait_job(ctx, job_id):
+    auth = headers(ctx)
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        response = ctx['client'].get(f'/api/v1/admin/backup/jobs/{job_id}', headers=auth)
+        assert response.status_code == 200, response.text
+        job = response.json()
+        if job['status'] in {'ready', 'failed'}:
+            return job
+        time.sleep(0.02)
+    raise AssertionError('Backup job timed out')
+
+
 def export(ctx):
     response = ctx['client'].post('/api/v1/admin/backup/export', headers=headers(ctx))
+    assert response.status_code == 202, response.text
+    job = wait_job(ctx, response.json()['job_id'])
+    assert job['status'] == 'ready', job
+    response = ctx['client'].get(f"/api/v1/admin/backup/jobs/{job['job_id']}/download", headers=headers(ctx))
     assert response.status_code == 200, response.text
     assert response.headers['cache-control'] == 'no-store'
     return response.content
@@ -207,13 +231,19 @@ def test_limits_and_confirmation(backup_context, monkeypatch):
     assert restore(ctx, b'{}', confirmation='wrong').status_code == 422
     monkeypatch.setattr(config, 'BACKUP_MAX_BYTES', 10)
     assert restore(ctx, b'x' * 11).status_code == 413
-    assert ctx['client'].post('/api/v1/admin/backup/export', headers=headers(ctx)).status_code == 409
+    response = ctx['client'].post('/api/v1/admin/backup/export', headers=headers(ctx))
+    assert response.status_code == 202
+    assert wait_job(ctx, response.json()['job_id'])['status'] == 'failed'
 
 
 def test_lock_blocks_requests_jobs_and_other_processes(backup_context):
     ctx = backup_context
     with maintenance.storage_access():
-        assert ctx['client'].post('/api/v1/admin/backup/export', headers=headers(ctx)).status_code == 409
+        response = ctx['client'].post('/api/v1/admin/backup/export', headers=headers(ctx))
+        assert response.status_code == 202
+        job_id = response.json()['job_id']
+        assert ctx['client'].get(f'/api/v1/admin/backup/jobs/{job_id}', headers=headers(ctx)).json()['status'] == 'queued'
+    assert wait_job(ctx, job_id)['status'] == 'ready'
     with maintenance.storage_access(exclusive=True):
         assert ctx['client'].get('/probe').status_code == 503
         command = "import fcntl,sys; f=open(sys.argv[1], 'a+b'); fcntl.flock(f,fcntl.LOCK_SH|fcntl.LOCK_NB)"
@@ -272,8 +302,10 @@ def test_queued_kb_upload_prevents_incomplete_backup(backup_context):
     kb_routes._UPLOAD_JOBS_DIR.mkdir()
     (kb_routes._UPLOAD_JOBS_DIR / 'waiting.json').write_text('{"status":"processing"}')
     response = ctx['client'].post('/api/v1/admin/backup/export', headers=headers(ctx))
-    assert response.status_code == 409
-    assert 'uploads' in response.json()['detail']
+    assert response.status_code == 202
+    job = wait_job(ctx, response.json()['job_id'])
+    assert job['status'] == 'failed'
+    assert 'uploads' in job['error']
 
 
 def test_profile_exposes_only_actual_global_admin(backup_context, monkeypatch):

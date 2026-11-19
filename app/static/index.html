@@ -440,7 +440,14 @@
               <h3 id="backupTitle">Backup e restauração da plataforma</h3>
               <p class="helper">Inclui todas as empresas, usuários, permissões, documentos, anexos e dados da Monitoria, inclusive áudios. Acesso exclusivo a administradores de todas as empresas.</p>
               <p class="helper">O arquivo contém dados confidenciais e hashes de senhas. Guarde-o em local protegido. Configurações do servidor, como o arquivo .env e chaves de integração, são mantidas separadamente.</p>
-              <button type="button" id="backupExportBtn" disabled>Baixar backup JSON</button>
+              <div class="backup-actions">
+                <button type="button" id="backupExportBtn" disabled>Gerar backup</button>
+                <button type="button" id="backupDownloadBtn" class="hidden-view" disabled>Baixar backup JSON</button>
+              </div>
+              <div id="backupProgressArea" class="backup-progress hidden-view">
+                <label id="backupProgressLabel" for="backupProgress" role="status" aria-live="polite">Preparando backup...</label>
+                <progress id="backupProgress" max="100" value="0" aria-labelledby="backupProgressLabel"></progress>
+              </div>
               <hr />
               <h4>Restaurar um backup</h4>
               <p class="helper">A restauração substitui todos os dados atuais pelo conteúdo do arquivo, inclusive usuários e senhas. Baixe um backup atual antes de continuar. Ao concluir, todos precisarão entrar novamente com as credenciais do backup.</p>

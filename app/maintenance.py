@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from functools import wraps
 from pathlib import Path
 
@@ -32,6 +32,24 @@ def storage_access(*, exclusive=False, blocking=False):
             fcntl.flock(handle, flags | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError as exc:
             raise MaintenanceBusy('Há operações em andamento. Aguarde e tente novamente.') from exc
+        try:
+            if not exclusive and (root / '.restore-journal.json').exists():
+                raise MaintenanceBusy('Recuperação pendente. Reinicie o serviço antes de continuar.')
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+@contextmanager
+def backup_control_access(*, exclusive=False, blocking=False):
+    """Allow authenticated progress reads during export, but never during restore."""
+    root = Path(config.DATA_DIR)
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.backup-control.lock').open('a+b') as handle:
+        try:
+            fcntl.flock(handle, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError as exc:
+            raise MaintenanceBusy('Backup ou restauração em andamento. Aguarde e tente novamente.') from exc
         try:
             if not exclusive and (root / '.restore-journal.json').exists():
                 raise MaintenanceBusy('Recuperação pendente. Reinicie o serviço antes de continuar.')
@@ -83,11 +101,18 @@ class StorageMaintenanceMiddleware:
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http' or scope['path'].startswith('/static/') or scope['path'] in {'/', '/health'}:
             return await self.app(scope, receive, send)
-        exclusive = scope['path'].rstrip('/') in {'/api/v1/admin/backup/export', '/api/v1/admin/backup/restore'}
-        guard = storage_access(exclusive=exclusive)
+        path = scope['path'].rstrip('/')
+        exclusive = path == '/api/v1/admin/backup/restore'
+        control = path.startswith('/api/v1/admin/backup/') or path in {
+            '/api/v1/auth/me', '/api/v1/auth/login', '/api/v1/auth/refresh', '/api/v1/config'}
+        guard = ExitStack()
         try:
-            guard.__enter__()
+            if control:
+                guard.enter_context(backup_control_access(exclusive=exclusive))
+            if exclusive or not control:
+                guard.enter_context(storage_access(exclusive=exclusive))
         except MaintenanceBusy as exc:
+            guard.close()
             return await JSONResponse({'detail': str(exc)}, status_code=409 if exclusive else 503,
                                       headers={'Retry-After': '3'})(scope, receive, send)
         try:

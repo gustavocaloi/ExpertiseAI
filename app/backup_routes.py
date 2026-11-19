@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 import logging
 import tempfile
@@ -9,8 +8,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from . import backup_services, config, db
-from .maintenance import finish_thread
+from . import backup_jobs, backup_services, config, db
+from .maintenance import finish_thread, MaintenanceBusy
 from .security import TokenData, decode_access_token, oauth2_scheme
 
 logger = logging.getLogger(__name__)
@@ -18,11 +17,18 @@ router = APIRouter(prefix='/admin/backup', tags=['backup'])
 
 
 class _BackupDownloadResponse(FileResponse):
+    def __init__(self, job, **kwargs):
+        self.job_id = job['job_id']
+        super().__init__(backup_jobs.root() / f"{self.job_id}.json", **kwargs)
+
     async def __call__(self, scope, receive, send):
         try:
-            await super().__call__(scope, receive, send)
-        finally:
-            Path(self.path).unlink(missing_ok=True)
+            with backup_jobs.artifact_access(self.job_id, shared=True):
+                if not Path(self.path).is_file():
+                    raise HTTPException(410, 'Arquivo expirado. Gere um novo backup.')
+                await super().__call__(scope, receive, send)
+        except MaintenanceBusy:
+            raise HTTPException(409, 'Arquivo sendo finalizado. Tente o download novamente.')
 
 
 def require_platform_admin(token: Optional[str] = Depends(oauth2_scheme)) -> TokenData:
@@ -46,22 +52,28 @@ def backup_status(user: TokenData = Depends(require_platform_admin)):
             'max_bytes': config.BACKUP_MAX_BYTES, 'scope': 'platform'}
 
 
-@router.post('/export')
-async def export_backup(user: TokenData = Depends(require_platform_admin)):
-    with tempfile.NamedTemporaryFile(prefix='expertise-backup-', suffix='.json', delete=False) as handle:
-        path = Path(handle.name)
-    try:
-        await finish_thread(backup_services.export_backup, path)
-    except backup_services.InvalidBackup as exc:
-        path.unlink(missing_ok=True)
-        raise HTTPException(409, str(exc)) from exc
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
-    logger.info('Backup global gerado pelo usuário id=%s.', user.user_id)
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    return _BackupDownloadResponse(path, filename=f'expertise-ai-backup-{stamp}.json', media_type='application/json',
-                                   headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
+@router.post('/export', status_code=202)
+def export_backup(user: TokenData = Depends(require_platform_admin)):
+    return backup_jobs.start_job(user)
+
+
+@router.get('/jobs/latest')
+def latest_backup(user: TokenData = Depends(require_platform_admin)):
+    return {'job': backup_jobs.latest_job(user)}
+
+
+@router.get('/jobs/{job_id}')
+def backup_progress(job_id: str, user: TokenData = Depends(require_platform_admin)):
+    return backup_jobs.public_job(backup_jobs.get_job(job_id, user))
+
+
+@router.get('/jobs/{job_id}/download')
+def download_backup(job_id: str, user: TokenData = Depends(require_platform_admin)):
+    job = backup_jobs.get_job(job_id, user)
+    if job['status'] != 'ready':
+        raise HTTPException(409, 'O backup ainda não está pronto para download.')
+    return _BackupDownloadResponse(job, filename=job['filename'], media_type='application/json',
+                                  headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
 
 
 @router.post('/restore')

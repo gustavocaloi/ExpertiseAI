@@ -75,11 +75,11 @@ def _schema(conn):
     return hashlib.sha256(json.dumps([list(row) for row in rows], ensure_ascii=False).encode()).hexdigest()
 
 
-def _snapshot(target):
+def _snapshot(target, progress=None):
     source = db.get_connection()
     dest = sqlite3.connect(target)
     try:
-        source.backup(dest)
+        source.backup(dest, pages=256, progress=progress)
     finally:
         source.close()
         dest.close()
@@ -106,25 +106,53 @@ def _safe_path(value):
     return path
 
 
-def export_backup(output: Path):
+def _export_files(roots):
+    for store, root in roots.items():
+        if not root.exists():
+            continue
+        for directory, dirs, names in os.walk(root, followlinks=False):
+            if any((Path(directory) / d).is_symlink() for d in dirs):
+                raise InvalidBackup('Armazenamento contém link simbólico; backup interrompido.')
+            if store == 'kb' and Path(directory) == root:
+                dirs[:] = [d for d in dirs if d != '_tmp_uploads']
+            for name in sorted(names):
+                path = Path(directory) / name
+                if path.is_symlink() or not path.is_file():
+                    raise InvalidBackup('Armazenamento contém arquivo especial; backup interrompido.')
+                relative = path.relative_to(root)
+                internal_lock = (store == 'kb' and len(relative.parts) == 2
+                                 and path.name == Path(services.DOCUMENTS_INDEX_FILENAME).with_suffix('.lock').name)
+                if not internal_lock:
+                    yield store, path, relative.as_posix(), path.stat().st_size
+
+
+def export_backup(output: Path, progress=None):
+    report = progress or (lambda phase, percent, message: None)
     roots = stores()
     for path in roots['upload_jobs'].glob('*.json'):
         if json.loads(path.read_text()).get('status') == 'processing':
             raise InvalidBackup('Aguarde o término dos uploads antes de gerar o backup.')
+    report('snapshot', 1, 'Criando cópia consistente do banco de dados...')
     with tempfile.TemporaryDirectory(prefix='expai-snapshot-') as work:
         snapshot = Path(work) / 'snapshot.sqlite3'
-        _snapshot(snapshot)
+        _snapshot(snapshot, progress=lambda status, remaining, total:
+                  report('snapshot', 1 + 8 * (total - remaining) / max(total, 1), 'Copiando banco de dados...'))
         conn = sqlite3.connect(snapshot)
         try:
-            # Active imports cannot be resumed from temporary input files. Export only quiescent state.
             if conn.execute("SELECT 1 FROM monitoria_jobs WHERE status='processing' LIMIT 1").fetchone():
                 raise InvalidBackup('Aguarde o término dos processamentos antes de gerar o backup.')
+            report('inventory', 10, 'Contando registros e arquivos...')
+            tables = _tables(conn)
+            total_rows = sum(conn.execute(f'SELECT COUNT(*) FROM {_quote(t)}').fetchone()[0] for t in tables)
+            files = list(_export_files(roots))
+            total_bytes = sum(max(size, 1) for _, _, _, size in files)
+            rows_done, bytes_done = 0, 0
             header = {'format': FORMAT, 'version': VERSION, 'created_at': datetime.now(timezone.utc).isoformat(),
                       'schema_sha256': _schema(conn), 'source_roots': {k: str(v) for k, v in roots.items()}}
             with output.open('w', encoding='utf-8') as handle:
                 out = _LimitedWriter(handle)
                 out.write(json.dumps(header, ensure_ascii=False)[:-1] + ',"tables":{')
-                for ti, table in enumerate(_tables(conn)):
+                for ti, table in enumerate(tables):
                     if ti:
                         out.write(',')
                     columns = _columns(conn, table)
@@ -138,42 +166,35 @@ def export_backup(output: Path):
                             if values[audio_column]:
                                 values[audio_column] = str(Path(values[audio_column]).resolve())
                         out.write(json.dumps([_encode_cell(v) for v in values], ensure_ascii=False, allow_nan=False))
+                        rows_done += 1
+                        report('tables', 10 + 40 * rows_done / max(total_rows, 1),
+                               f'Exportando registros: {rows_done} de {total_rows}.')
                     out.write(']}')
                 out.write('},"files":[')
-                count = 0
-                for store, root in roots.items():
-                    if not root.exists():
-                        continue
-                    for directory, dirs, names in os.walk(root, followlinks=False):
-                        if any((Path(directory) / d).is_symlink() for d in dirs):
-                            raise InvalidBackup('Armazenamento contém link simbólico; backup interrompido.')
-                        for name in sorted(names):
-                            path = Path(directory) / name
-                            if path.is_symlink() or not path.is_file():
-                                raise InvalidBackup('Armazenamento contém arquivo especial; backup interrompido.')
-                            relative = path.relative_to(root)
-                            internal_lock = (store == 'kb' and len(relative.parts) == 2
-                                             and path.name == Path(services.DOCUMENTS_INDEX_FILENAME).with_suffix('.lock').name)
-                            if internal_lock or (store == 'kb' and relative.parts[0] == '_tmp_uploads'):
-                                continue
-                            if count:
+                for count, (store, path, relative, size) in enumerate(files):
+                    if count:
+                        out.write(',')
+                    entry = {'store': store, 'path': relative, 'size': size}
+                    out.write(json.dumps(entry, ensure_ascii=False)[:-1] + ',"chunks":[')
+                    digest = hashlib.sha256()
+                    with path.open('rb') as source:
+                        ci = 0
+                        while chunk := source.read(CHUNK_SIZE):
+                            if ci:
                                 out.write(',')
-                            entry = {'store': store, 'path': path.relative_to(root).as_posix(), 'size': path.stat().st_size}
-                            out.write(json.dumps(entry, ensure_ascii=False)[:-1] + ',"chunks":[')
-                            digest = hashlib.sha256()
-                            with path.open('rb') as source:
-                                ci = 0
-                                while chunk := source.read(CHUNK_SIZE):
-                                    if ci:
-                                        out.write(',')
-                                    out.write(json.dumps(base64.b64encode(chunk).decode('ascii')))
-                                    digest.update(chunk)
-                                    ci += 1
-                            out.write('],"sha256":' + json.dumps(digest.hexdigest()) + '}')
-                            count += 1
+                            out.write(json.dumps(base64.b64encode(chunk).decode('ascii')))
+                            digest.update(chunk)
+                            ci += 1
+                            bytes_done += len(chunk)
+                            report('files', 50 + 48 * bytes_done / max(total_bytes, 1),
+                                   f'Preparando arquivos: {count + 1} de {len(files)}.')
+                    if not size:
+                        bytes_done += 1
+                    out.write('],"sha256":' + json.dumps(digest.hexdigest()) + '}')
+                    report('files', 50 + 48 * bytes_done / max(total_bytes, 1),
+                           f'Arquivos preparados: {count + 1} de {len(files)}.')
                 out.write(']}')
-            if output.stat().st_size > config.BACKUP_MAX_BYTES:
-                raise InvalidBackup('Backup excede o limite configurado em EXPAI_BACKUP_MAX_MB.')
+            report('finalizing', 99, 'Finalizando o arquivo para download...')
         finally:
             conn.close()
 
