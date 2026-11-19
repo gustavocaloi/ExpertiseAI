@@ -224,7 +224,10 @@ Novos envios usando central/equipe são rejeitados. Rotas de criação/alteraç�
 ## Backup global (administradores)
 
 - `GET /api/v1/admin/backup/status`: permissão, formato e limite do backup.
-- `POST /api/v1/admin/backup/export`: download completo em JSON.
+- `POST /api/v1/admin/backup/export`: inicia geração assíncrona; retorna `202` com `job_id`.
+- `GET /api/v1/admin/backup/jobs/latest`: recupera o último job da conta.
+- `GET /api/v1/admin/backup/jobs/{job_id}`: estado, progresso por etapa e disponibilidade.
+- `GET /api/v1/admin/backup/jobs/{job_id}/download`: baixa o JSON pronto; disponível por 24 horas à conta solicitante com permissão administrativa atual.
 - `POST /api/v1/admin/backup/restore`: importa multipart `file` com `confirmation=RESTAURAR` e substitui a instalação inteira.
 
 Exigem perfil `admin` ativo em todas as empresas, com controle de acesso habilitado. A restauração invalida sessões anteriores. Veja [backup e restauração](backup.md) para contratos, compatibilidade e tratamento de falhas.

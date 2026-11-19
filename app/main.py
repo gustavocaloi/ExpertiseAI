@@ -31,8 +31,8 @@ from .config import (
 )
 from .mcp_server import create_mcp_component
 from .security import hash_password
-from . import backup_routes, backup_services
-from .maintenance import StorageMaintenanceMiddleware, storage_access, MaintenanceBusy
+from . import backup_routes, backup_services, backup_jobs
+from .maintenance import StorageMaintenanceMiddleware, storage_access, backup_control_access, MaintenanceBusy, finish_thread
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,13 @@ async def _upload_jobs_cleanup_loop() -> None:
                 monitoria_services.cleanup_zombie_monitoria_jobs()
         except MaintenanceBusy:
             pass
+        try:
+            with backup_control_access():
+                await finish_thread(backup_jobs.cleanup_expired)
+        except MaintenanceBusy:
+            pass
+        except Exception:
+            logger.exception("Falha na limpeza de backups expirados.")
         await asyncio.sleep(30)
 
 
@@ -146,7 +153,7 @@ def create_app() -> FastAPI:
 
     step_t0 = time.perf_counter()
     logger.info("Startup step: init_db iniciado.")
-    with storage_access(exclusive=True, blocking=True):
+    with backup_control_access(exclusive=True, blocking=True), storage_access(exclusive=True, blocking=True):
         backup_services.recover_restore()
         db.init_db()
     logger.info("Startup step: init_db concluido em %.2fs.", time.perf_counter() - step_t0)
@@ -159,7 +166,7 @@ def create_app() -> FastAPI:
     if BOOTSTRAP_DEFAULT_ADMIN:
         step_t0 = time.perf_counter()
         logger.info("Startup step: ensure_default_admin iniciado.")
-        with storage_access(exclusive=True, blocking=True):
+        with backup_control_access(exclusive=True, blocking=True), storage_access(exclusive=True, blocking=True):
             db.ensure_default_admin(
                 company_name=DEFAULT_COMPANY_NAME,
                 company_description=DEFAULT_COMPANY_DESCRIPTION,

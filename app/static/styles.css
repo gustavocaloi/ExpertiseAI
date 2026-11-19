@@ -848,3 +848,8 @@ body:has(.doc-modal.open, .import-overlay:not(.hidden-view)) { overflow: hidden;
 #backupSession hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0; }
 #backupSession h4 { margin-bottom: 12px; }
 #backupStatus { margin-top: 16px; overflow-wrap: anywhere; }
+
+.backup-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.backup-progress { margin-top: 20px; }
+.backup-progress label { display: block; margin-bottom: 8px; }
+.backup-progress progress { display: block; width: 100%; height: 18px; accent-color: var(--primary); }

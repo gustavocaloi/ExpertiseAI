@@ -2004,6 +2004,7 @@ function showInlineCreateSession(show = true) {
 }
 
 function showSession(sessionId) {
+  if (sessionId !== 'backupSession') stopBackupPolling();
   if (sessionId === 'backupSession' && (!isAccessControlEnabled() || state.profile?.can_manage_backup !== true)) {
     showToast('Backup restrito a administradores de todas as empresas.', 'error');
     sessionId = 'profileSession';
@@ -2330,6 +2331,7 @@ function persistAuthTokens(accessToken = '', refreshToken = '') {
 }
 
 function doLogout(reason = '', notify = false) {
+  resetBackupContext();
   resetMonitoriaBatchContext(true);
   document.getElementById('monitoriaAudio')?.pause();
   state.token = '';
@@ -5250,61 +5252,161 @@ mon('ClassifyForm').addEventListener('submit', event => {
 let backupBusy = false;
 let backupMaxBytes = 0;
 let backupAllowed = false;
+let backupJob = null;
+let backupPollTimer = null;
+let backupContext = 0;
 function setBackupStatus(message, error = false) {
   const status = document.getElementById('backupStatus');
   status.textContent = message;
   status.className = error ? 'helper error' : 'helper';
 }
+function backupRunning() { return ['queued', 'running'].includes(backupJob?.status); }
+function stopBackupPolling() {
+  clearTimeout(backupPollTimer);
+  backupPollTimer = null;
+}
+function resetBackupContext() {
+  stopBackupPolling();
+  backupContext++;
+  backupJob = null;
+  backupAllowed = false;
+  backupBusy = false;
+  document.getElementById('backupProgressArea')?.classList.add('hidden-view');
+  document.getElementById('backupDownloadBtn')?.classList.add('hidden-view');
+}
 function setBackupBusy(busy) {
   backupBusy = busy;
-  document.getElementById('backupExportBtn').disabled = busy || !backupAllowed;
-  document.getElementById('backupRestoreBtn').disabled = busy || !backupAllowed;
-  document.getElementById('backupFile').disabled = busy;
-  document.getElementById('backupConfirmation').disabled = busy;
-  document.getElementById('backupSession').setAttribute('aria-busy', String(busy));
+  const preparing = backupRunning();
+  document.getElementById('backupExportBtn').disabled = busy || preparing || !backupAllowed;
+  document.getElementById('backupRestoreBtn').disabled = busy || preparing || !backupAllowed;
+  document.getElementById('backupFile').disabled = busy || preparing;
+  document.getElementById('backupConfirmation').disabled = busy || preparing;
+  document.getElementById('backupDownloadBtn').disabled = busy || backupJob?.status !== 'ready' || !backupAllowed;
 }
+function renderBackupJob(job) {
+  backupJob = job;
+  const area = document.getElementById('backupProgressArea');
+  const progress = document.getElementById('backupProgress');
+  const label = document.getElementById('backupProgressLabel');
+  const download = document.getElementById('backupDownloadBtn');
+  area.classList.toggle('hidden-view', !job);
+  download.classList.toggle('hidden-view', job?.status !== 'ready');
+  if (job) {
+    const percent = Math.max(0, Math.min(100, Number(job.progress) || 0));
+    if (job.status === 'queued') progress.removeAttribute('value');
+    else progress.value = percent;
+    label.textContent = job.status === 'queued' ? job.message : `${percent}% — ${job.message}`;
+    if (job.status === 'ready') {
+      setBackupStatus(`Arquivo pronto. Clique em “Baixar backup JSON”. Disponível até ${new Date(job.expires_at * 1000).toLocaleString('pt-BR')}.`);
+    } else if (job.status === 'failed') {
+      setBackupStatus(job.error || 'Não foi possível gerar o backup. Tente novamente.', true);
+    } else {
+      setBackupStatus('A preparação continua no servidor. Você pode reabrir esta tela para acompanhar.');
+    }
+  }
+  setBackupBusy(backupBusy);
+}
+function scheduleBackupPoll() {
+  stopBackupPolling();
+  if (backupRunning() && state.token && !document.hidden && sessions.backupSession.classList.contains('active-session')) {
+    backupPollTimer = setTimeout(pollBackupJob, 1500);
+  }
+}
+async function pollBackupJob() {
+  const context = backupContext;
+  const jobId = backupJob?.job_id;
+  if (!jobId || !backupAllowed) return;
+  try {
+    const job = await apiFetch(`/api/v1/admin/backup/jobs/${encodeURIComponent(jobId)}`);
+    if (context !== backupContext || backupJob?.job_id !== jobId) return;
+    renderBackupJob(job);
+  } catch (error) {
+    if (context !== backupContext) return;
+    if ([401, 403, 404, 410].includes(error.status)) {
+      renderBackupJob(null);
+      if ([401, 403].includes(error.status)) backupAllowed = false;
+      setBackupBusy(false);
+    }
+    setBackupStatus(`${error.message}${backupRunning() ? ' Tentando atualizar o progresso novamente...' : ''}`, true);
+  }
+  if (context === backupContext) scheduleBackupPoll();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopBackupPolling();
+  else scheduleBackupPoll();
+});
 document.getElementById('backupMenuItem')?.addEventListener('click', async () => {
   hideUserMenu();
-  if (backupBusy || state.profile?.can_manage_backup !== true) return;
+  if (state.profile?.can_manage_backup !== true) return;
   showSession('backupSession');
+  if (backupBusy) return;
+  stopBackupPolling();
+  const context = ++backupContext;
   backupAllowed = false;
   setBackupBusy(true);
-  setBackupStatus('Verificando acesso ao backup...');
+  setBackupStatus('Consultando backups...');
   try {
-    const status = await apiFetch('/api/v1/admin/backup/status');
+    const [status, latest] = await Promise.all([
+      apiFetch('/api/v1/admin/backup/status'), apiFetch('/api/v1/admin/backup/jobs/latest'),
+    ]);
+    if (context !== backupContext) return;
     backupMaxBytes = status.max_bytes;
     backupAllowed = true;
-    setBackupStatus(`Limite do arquivo: ${Math.round(backupMaxBytes / 1024 / 1024)} MB. Aguarde uploads e análises em andamento antes de iniciar.`);
+    renderBackupJob(latest.job);
+    if (!latest.job) setBackupStatus(`Limite do arquivo: ${Math.round(backupMaxBytes / 1024 / 1024)} MB. Gere o backup e acompanhe o progresso nesta tela.`);
   } catch (error) {
+    if (context !== backupContext) return;
+    renderBackupJob(null);
     setBackupStatus(error.message, true);
   } finally {
-    setBackupBusy(false);
+    if (context === backupContext) { setBackupBusy(false); scheduleBackupPoll(); }
   }
 });
 document.getElementById('backupExportBtn')?.addEventListener('click', async () => {
-  if (backupBusy || !backupAllowed) return;
+  if (backupBusy || backupRunning() || !backupAllowed) return;
+  const context = backupContext;
   setBackupBusy(true);
-  setBackupStatus('Gerando backup completo. Aguarde o início do download...');
+  renderBackupJob({ status: 'queued', progress: 0, message: 'Solicitando preparação do backup...' });
   try {
-    const blob = await apiFetch('/api/v1/admin/backup/export', { method: 'POST', responseType: 'blob' });
+    const job = await apiFetch('/api/v1/admin/backup/export', { method: 'POST' });
+    if (context === backupContext) renderBackupJob(job);
+  } catch (error) {
+    if (context !== backupContext) return;
+    renderBackupJob(null);
+    setBackupStatus(error.message, true);
+  } finally {
+    if (context === backupContext) { setBackupBusy(false); scheduleBackupPoll(); }
+  }
+});
+document.getElementById('backupDownloadBtn')?.addEventListener('click', async () => {
+  if (backupBusy || !backupAllowed || backupJob?.status !== 'ready') return;
+  const context = backupContext;
+  const job = backupJob;
+  setBackupBusy(true);
+  setBackupStatus('Baixando arquivo preparado...');
+  try {
+    const blob = await apiFetch(`/api/v1/admin/backup/jobs/${encodeURIComponent(job.job_id)}/download`, { responseType: 'blob' });
+    if (context !== backupContext) return;
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `expertise-ai-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    link.download = job.filename;
     document.body.appendChild(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setBackupStatus('Backup gerado. Confira o arquivo na pasta de downloads.');
+    setBackupStatus('Download iniciado. O arquivo continua disponível até o prazo informado.');
   } catch (error) {
+    if (context !== backupContext) return;
+    if ([403, 404, 410].includes(error.status)) renderBackupJob(null);
     setBackupStatus(error.message, true);
   } finally {
-    setBackupBusy(false);
+    if (context === backupContext) setBackupBusy(false);
   }
 });
 document.getElementById('backupRestoreForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (backupBusy || !backupAllowed) return;
+  if (backupBusy || backupRunning() || !backupAllowed) return;
   const file = document.getElementById('backupFile').files[0];
   const confirmation = document.getElementById('backupConfirmation').value;
   if (!file || confirmation !== 'RESTAURAR') return;

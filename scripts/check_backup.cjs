@@ -4,9 +4,11 @@ const { chromium } = require('playwright');
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || 'chrome' });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  require('node:fs').mkdirSync('/tmp/expertise-backup-ui', { recursive: true });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   let admin = true, exportFailure = false, restoreFailure = true, restoreCalls = 0;
+  let job = null, generationCalls = 0, downloadCalls = 0, downloadExpired = false;
   await page.route('**/api/**', route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -15,7 +17,18 @@ const { chromium } = require('playwright');
     if (path.endsWith('/config')) return send({ access_control_enabled: true, default_company_id: 1, default_company_name: 'Teste' });
     if (path.endsWith('/auth/me')) return send({ user_id: 1, full_name: 'Admin Teste', email: 'admin@example.test', company_id: 1, company_name: 'Teste', role: admin ? 'admin' : 'editor', roles: [admin ? 'admin' : 'editor'], modules: ['conteudo'], can_manage_backup: admin });
     if (path.endsWith('/backup/status')) return send({ max_bytes: 512 * 1024 * 1024 });
-    if (path.endsWith('/backup/export')) return exportFailure ? send({ detail: 'Há operações em andamento. Aguarde e tente novamente.' }, 409) : send({ format: 'expertise-ai-platform-backup', version: 1 });
+    if (path.endsWith('/backup/export')) {
+      if (exportFailure) return send({ detail: 'Há operações em andamento. Aguarde e tente novamente.' }, 409);
+      generationCalls++;
+      job = { job_id: 'fixture-job', status: 'queued', progress: 0, message: 'Aguardando operações em andamento...', expires_at: Date.now() / 1000 + 86400, filename: 'expertise-ai-backup.json' };
+      return send(job, 202);
+    }
+    if (path.endsWith('/backup/jobs/latest')) return send({ job });
+    if (path.endsWith('/backup/jobs/fixture-job')) return send(job);
+    if (path.endsWith('/backup/jobs/fixture-job/download')) {
+      downloadCalls++;
+      return downloadExpired ? send({ detail: 'Backup expirado. Gere novamente.' }, 410) : send({ format: 'expertise-ai-platform-backup', version: 1 });
+    }
     if (path.endsWith('/backup/restore')) {
       restoreCalls++;
       assert(route.request().postData().includes('RESTAURAR'));
@@ -38,8 +51,37 @@ const { chromium } = require('playwright');
   await page.locator('#backupMenuItem').click();
   await page.locator('#backupExportBtn:not([disabled])').waitFor();
   assert(await page.locator('#backupSession').evaluate(el => el.classList.contains('active-session')));
-  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#backupExportBtn').click()]);
+  await page.locator('#backupExportBtn').click();
+  await page.locator('#backupProgressArea:not(.hidden-view)').waitFor();
+  assert.equal(await page.locator('#backupProgress').getAttribute('value'), null);
+  assert(await page.locator('#backupRestoreBtn').isDisabled());
+  assert(!(await page.locator('#backupDownloadBtn').isVisible()));
+  job = { ...job, status: 'running', progress: 35, message: 'Exportando registros: 35 de 100.' };
+  await page.waitForFunction(() => document.querySelector('#backupProgress').value === 35);
+  await page.reload();
+  await page.locator('#dashboardPanel.active').waitFor();
+  await page.locator('#userMenuBtn').click();
+  await page.locator('#backupMenuItem').click();
+  await page.waitForFunction(() => document.querySelector('#backupProgress').value === 35);
+  assert.equal(generationCalls, 1);
+  await page.screenshot({ path: '/tmp/expertise-backup-ui/backup-preparing.png', fullPage: true });
+  job = { ...job, status: 'ready', progress: 100, message: 'Backup pronto para download.' };
+  await page.locator('#backupDownloadBtn:not([disabled])').waitFor();
+  assert.equal(downloadCalls, 0, 'Backup must not download automatically');
+  assert.equal(await page.locator('#backupProgress').evaluate(el => el.value), 100);
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#backupDownloadBtn').click()]);
   assert(download.suggestedFilename().endsWith('.json'));
+  await page.locator('#backupExportBtn:not([disabled])').waitFor();
+  await Promise.all([page.waitForEvent('download'), page.locator('#backupDownloadBtn').click()]);
+  await page.locator('#backupExportBtn:not([disabled])').waitFor();
+  assert.equal(downloadCalls, 2);
+  downloadExpired = true;
+  await page.locator('#backupDownloadBtn').click();
+  await page.waitForFunction(() => document.querySelector('#backupStatus').textContent.includes('expirado'));
+  assert(!(await page.locator('#backupDownloadBtn').isVisible()));
+  await page.locator('#backupExportBtn').click();
+  job = { ...job, status: 'failed', progress: 15, message: 'O backup não foi concluído.', error: 'Falha de armazenamento simulada.' };
+  await page.waitForFunction(() => document.querySelector('#backupStatus').textContent.includes('Falha de armazenamento'));
   await page.locator('#backupExportBtn:not([disabled])').waitFor();
   exportFailure = true;
   await page.locator('#backupExportBtn').click();
@@ -71,5 +113,5 @@ const { chromium } = require('playwright');
   assert(!(await page.locator('#backupMenuItem').isVisible()));
   assert.deepEqual(errors, []);
   await browser.close();
-  console.log('Backup UI: download, errors, confirmation, restore, logout, permissions and responsive layout passed.');
+  console.log('Backup UI: async generation, progress, reload recovery, explicit/repeated download, expiry, failure, restore and permissions passed.');
 })().catch(error => { console.error(error); process.exit(1); });
